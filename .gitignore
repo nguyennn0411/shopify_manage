@@ -1,0 +1,11 @@
+node_modules/
+.npm-cache/
+.next/
+dist/
+.env
+.env.local
+.turbo/
+coverage/
+*.tsbuildinfo
+packages/database/generated/
+

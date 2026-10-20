@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root { --canvas: #f5f6f8; --surface: #ffffff; --text: #111827; --muted: #667085; --border: #e6e9ee; --accent: #c46a45; --accent-soft: #fff1ea; }
+.dark { --canvas: #11151b; --surface: #1a2028; --text: #f3f5f8; --muted: #9ba5b5; --border: #313b48; --accent: #dd8965; --accent-soft: #382922; }
+@theme inline { --color-canvas: var(--canvas); --color-surface: var(--surface); --color-ink: var(--text); --color-muted: var(--muted); --color-line: var(--border); --color-accent: var(--accent); --color-accentsoft: var(--accent-soft); }
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+body { background: var(--canvas); color: var(--text); font-family: Arial, Helvetica, sans-serif; font-size: 14px; }
+button { cursor: pointer; }
+input, select { outline: none; }
+input:focus, select:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }

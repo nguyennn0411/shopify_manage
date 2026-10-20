@@ -1,0 +1,20 @@
+{
+  "name": "shopify-company-erp",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c blue,green,magenta \"npm run dev -w @erp/api\" \"npm run dev:worker -w @erp/api\" \"npm run dev -w @erp/web\"",
+    "lint": "npm run lint -w @erp/api && npm run lint -w @erp/web",
+    "typecheck": "npm run typecheck -w @erp/api && npm run typecheck -w @erp/web",
+    "build": "npm run db:generate && npm run build -w @erp/api && npm run build -w @erp/web",
+    "test": "npm run test -w @erp/api",
+    "db:generate": "npm run generate -w @erp/database",
+    "db:migrate": "npm run migrate -w @erp/database",
+    "db:seed": "npm run seed -w @erp/database"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.9.2"
+  }
+}
