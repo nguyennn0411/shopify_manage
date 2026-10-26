@@ -53,7 +53,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   const config = new DocumentBuilder().setTitle('Company ERP API').setVersion('1.0').addCookieAuth('erp_session').build();
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
-  await app.listen(Number(process.env.API_PORT || 4000), '0.0.0.0');
+  await app.listen(Number(process.env.PORT || process.env.API_PORT || 4000), '0.0.0.0');
 }
 
 bootstrap();

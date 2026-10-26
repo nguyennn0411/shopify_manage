@@ -9,3 +9,8 @@ coverage/
 *.tsbuildinfo
 packages/database/generated/
 
+
+.vercel
+.env*
+apps/api/.agents/
+apps/api/skills-lock.json
