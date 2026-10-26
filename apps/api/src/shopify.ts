@@ -7,18 +7,18 @@ import type { Response } from 'express';
 import { actor, AppRequest, DatabaseService, Public, RedisService, RequireStorePermission } from './core';
 import { exchangeCode, graphqlWithToken, REQUIRED_SCOPES, saveToken, shopifyScopeError } from './shopify-client';
 import { validShopDomain, verifyOAuthQuery, verifyWebhook } from './shopify-security';
-import { processSync } from './worker';
+import { processSync, processWebhookForServerless } from './worker';
 
 const WEBHOOK_TOPICS = ['PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE', 'ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED', 'ORDERS_DELETE', 'REFUNDS_CREATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'INVENTORY_LEVELS_UPDATE', 'APP_UNINSTALLED'];
 
 @Injectable()
 export class ShopifyService implements OnModuleDestroy {
-  readonly queue: Queue;
+  readonly queue?: Queue;
   private readonly logger = new Logger(ShopifyService.name);
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService) {
-    this.queue = new Queue('shopify-sync', { connection: redis.duplicate({ maxRetriesPerRequest: 1, enableOfflineQueue: false }) });
+    if (!process.env.VERCEL) this.queue = new Queue('shopify-sync', { connection: redis.duplicate({ maxRetriesPerRequest: 1, enableOfflineQueue: false }) });
   }
-  async onModuleDestroy() { await this.queue.close(); }
+  async onModuleDestroy() { await this.queue?.close(); }
   private configured() {
     if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET || !process.env.SHOPIFY_CALLBACK_URL || !process.env.SHOPIFY_WEBHOOK_URL) {
       throw new BadRequestException('Thiếu cấu hình Shopify OAuth và webhook trong biến môi trường');
@@ -104,7 +104,7 @@ export class ShopifyService implements OnModuleDestroy {
     }
     for (const row of rows) {
       try {
-        await this.queue.add('sync', { syncJobId: row.id }, { jobId: row.id, attempts: 5,
+        await this.queue!.add('sync', { syncJobId: row.id }, { jobId: row.id, attempts: 5,
           backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
       } catch {
         this.logger.warn(`Không thể đưa sync job ${row.id} vào BullMQ; worker sẽ thử phục hồi hàng đợi`);
@@ -155,8 +155,12 @@ export class ShopifyService implements OnModuleDestroy {
     const existing = await this.db.webhookEvent.findUnique({ where: { storeId_webhookId: { storeId: store.id, webhookId } } });
     if (existing) return { accepted: true, duplicate: true };
     const row = await this.db.webhookEvent.create({ data: { storeId: store.id, webhookId, topic, payload } });
-    try { await this.queue.add('webhook', { webhookEventId: row.id }, { jobId: row.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000 }); }
-    catch { /* Persisted event is recovered by worker's reconciliation loop. */ }
+    if (process.env.VERCEL) {
+      waitUntil(processWebhookForServerless(row.id).catch(() => undefined));
+    } else {
+      try { await this.queue!.add('webhook', { webhookEventId: row.id }, { jobId: row.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000 }); }
+      catch { /* Persisted event is recovered by worker's reconciliation loop. */ }
+    }
     return { accepted: true };
   }
 }

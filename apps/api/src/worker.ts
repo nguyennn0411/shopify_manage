@@ -282,6 +282,18 @@ async function processWebhook(webhookEventId: string) {
   await db.webhookEvent.update({ where: { id: event.id }, data: { status: 'PROCESSED', processedAt: new Date(), error: null } });
 }
 
+export async function processWebhookForServerless(webhookEventId: string) {
+  try {
+    return await processWebhook(webhookEventId);
+  } catch (error) {
+    const reason = safeSyncError(error);
+    await db.webhookEvent.updateMany({ where: { id: webhookEventId, status: 'RECEIVED' },
+      data: { status: 'FAILED', error: reason } });
+    console.error(JSON.stringify({ event: 'shopify.webhook', webhookEventId, stage: 'failed', reason }));
+    throw error;
+  }
+}
+
 type QueueData = { syncJobId?: string; webhookEventId?: string };
 
 function startWorker() {
