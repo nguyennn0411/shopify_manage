@@ -5,6 +5,7 @@ import { base32Encode, hashPassword, verifyPassword, verifyTotp } from '../src/s
 import { decryptToken, encryptToken, validShopDomain, verifyOAuthQuery, verifyWebhook } from '../src/shopify-security';
 import { decryptIntegrationCredentials, encryptIntegrationCredentials } from '../src/integration-security';
 import { weightedMovingAverageForecast } from '../src/analytics-math';
+import { exchangeCode } from '../src/shopify-client';
 
 test('password hash verifies the correct password and rejects another', () => {
   const hash = hashPassword('a strong password 123!');
@@ -53,6 +54,44 @@ test('Shopify token encryption authenticates ciphertext', () => {
   } finally {
     if (before === undefined) delete process.env.SHOPIFY_TOKEN_ENCRYPTION_KEY;
     else process.env.SHOPIFY_TOKEN_ENCRYPTION_KEY = before;
+  }
+});
+
+test('Shopify OAuth diagnostics include safe response metadata without secrets', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousClientId = process.env.SHOPIFY_CLIENT_ID;
+  const previousSecret = process.env.SHOPIFY_CLIENT_SECRET;
+  process.env.SHOPIFY_CLIENT_ID = 'public-client-id';
+  process.env.SHOPIFY_CLIENT_SECRET = 'private-client-secret';
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'invalid_client', error_description: 'Rejected private-client-secret and authorization-code-value' }), { status: 401, headers: { 'content-type': 'application/json' } });
+  try {
+    await assert.rejects(() => exchangeCode('valid-store.myshopify.com', 'authorization-code-value'), error => {
+      const message = error instanceof Error ? error.message : String(error);
+      assert.match(message, /HTTP 401/);
+      assert.match(message, /invalid_client/);
+      assert.equal(message.includes('private-client-secret'), false);
+      assert.equal(message.includes('authorization-code-value'), false);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousClientId === undefined) delete process.env.SHOPIFY_CLIENT_ID; else process.env.SHOPIFY_CLIENT_ID = previousClientId;
+    if (previousSecret === undefined) delete process.env.SHOPIFY_CLIENT_SECRET; else process.env.SHOPIFY_CLIENT_SECRET = previousSecret;
+  }
+});
+
+test('Shopify OAuth accepts complete expiring and non-expiring offline token responses', async () => {
+  const previousFetch = globalThis.fetch;
+  const responses = [
+    { access_token: 'token-one', scope: 'write_products, read_orders' },
+    { access_token: 'token-two', scope: 'write_products,read_orders', expires_in: 3600, refresh_token: 'refresh-two', refresh_token_expires_in: 7776000 },
+  ];
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify(responses.shift()), { status: 200, headers: { 'content-type': 'application/json' } });
+    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-one')).scope, 'write_products,read_orders');
+    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-two')).expires_in, 3600);
+  } finally {
+    globalThis.fetch = previousFetch;
   }
 });
 
