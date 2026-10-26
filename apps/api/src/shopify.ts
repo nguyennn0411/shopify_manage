@@ -4,7 +4,7 @@ import { Queue } from 'bullmq';
 import { randomBytes } from 'node:crypto';
 import type { Response } from 'express';
 import { actor, AppRequest, DatabaseService, Public, RedisService, RequireStorePermission } from './core';
-import { exchangeCode, graphqlWithToken, REQUIRED_SCOPES, saveToken } from './shopify-client';
+import { exchangeCode, graphqlWithToken, REQUIRED_SCOPES, saveToken, shopifyScopeError } from './shopify-client';
 import { validShopDomain, verifyOAuthQuery, verifyWebhook } from './shopify-security';
 
 const WEBHOOK_TOPICS = ['PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE', 'ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED', 'ORDERS_DELETE', 'REFUNDS_CREATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'INVENTORY_LEVELS_UPDATE', 'APP_UNINSTALLED'];
@@ -55,8 +55,8 @@ export class ShopifyService implements OnModuleDestroy {
     const store = await this.db.store.findFirst({ where: { id: saved.storeId, companyId: saved.companyId, shopifyDomain: shop, status: { not: 'DISABLED' } } });
     if (!store) throw new ForbiddenException('Store không tồn tại');
     const token = await exchangeCode(shop, code);
-    const scopes = new Set(token.scope.split(','));
-    if (REQUIRED_SCOPES.some(scope => !scopes.has(scope))) throw new BadRequestException('Shopify chưa cấp đủ quyền cần thiết');
+    const scopeError = shopifyScopeError(token.scope.split(','));
+    if (scopeError) throw new BadRequestException(scopeError);
     const verification = await graphqlWithToken<{ shop: { myshopifyDomain: string } }>(shop, token.access_token, '{ shop { myshopifyDomain } }');
     if (verification.shop.myshopifyDomain !== shop) throw new ForbiddenException('Shopify token thuộc shop khác');
     await this.registerWebhooks(shop, token.access_token);
@@ -141,7 +141,7 @@ export class ShopifyCallbackController {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Shopify connection failed';
       this.logger.error(`Shopify OAuth callback failed: ${message}`, error instanceof Error ? error.stack : undefined);
-      response.redirect(`${process.env.APP_ORIGIN}/dashboard/stores?shopify_error=${encodeURIComponent(message.slice(0, 180))}`);
+      response.redirect(`${process.env.APP_ORIGIN}/dashboard/stores?shopify_error=${encodeURIComponent(message.slice(0, 1500))}`);
     }
   }
   @Public() @Post('webhook') webhook(@Req() req: AppRequest,

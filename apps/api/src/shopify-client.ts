@@ -7,6 +7,23 @@ export const REQUIRED_SCOPES = ['write_products', 'read_orders', 'read_inventory
 type TokenResponse = { access_token: string; scope: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number };
 type RawTokenResponse = Omit<TokenResponse, 'scope'> & { scope?: unknown };
 
+export function normalizeShopifyScopes(values: Iterable<string>): string[] {
+  return [...new Set([...values].map(value => value.trim().toLowerCase()).filter(value => /^[a-z][a-z0-9_]{1,79}$/.test(value)))].sort();
+}
+
+export function missingRequiredShopifyScopes(granted: Iterable<string>): string[] {
+  const actual = new Set(normalizeShopifyScopes(granted));
+  return REQUIRED_SCOPES.filter(required => !actual.has(required) && !(required.startsWith('read_') && actual.has(`write_${required.slice(5)}`)));
+}
+
+export function shopifyScopeError(granted: Iterable<string>): string | null {
+  const actual = normalizeShopifyScopes(granted);
+  const missing = missingRequiredShopifyScopes(actual);
+  if (missing.length === 0) return null;
+  const format = (values: string[]) => values.length ? values.join(', ') : '(không có)';
+  return `Shopify chưa cấp đủ quyền. ERP yêu cầu: ${format(REQUIRED_SCOPES)} | Shopify đã cấp: ${format(actual)} | Còn thiếu: ${format(missing)}`;
+}
+
 function safeResponseFields(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'none';
   return Object.keys(value).filter(key => /^[a-z][a-z0-9_]{0,48}$/i.test(key)).sort().slice(0, 20).join(',') || 'none';
@@ -54,7 +71,7 @@ export async function exchangeCode(shop: string, code: string): Promise<TokenRes
     scope = installation.currentAppInstallation.accessScopes.map(item => item.handle).filter(Boolean);
   }
   if (scope.length === 0) throw new Error(`Shopify token has no granted Admin API scopes (HTTP ${response.status}; fields=${fields})`);
-  const token: TokenResponse = { ...rawToken, scope: [...new Set(scope)].join(',') };
+  const token: TokenResponse = { ...rawToken, scope: normalizeShopifyScopes(scope).join(',') };
   const expiryFieldCount = [token.expires_in, token.refresh_token, token.refresh_token_expires_in].filter(value => value !== undefined && value !== null).length;
   if (expiryFieldCount !== 0 && expiryFieldCount !== 3) throw new Error(`Shopify returned incomplete token expiry metadata (HTTP ${response.status}; fields=${fields})`);
   if (expiryFieldCount === 3 && (!(Number.isFinite(token.expires_in) && token.expires_in! > 0) || typeof token.refresh_token !== 'string' || !token.refresh_token || !(Number.isFinite(token.refresh_token_expires_in) && token.refresh_token_expires_in! > 0))) {

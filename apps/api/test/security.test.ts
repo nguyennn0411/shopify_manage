@@ -5,7 +5,7 @@ import { base32Encode, hashPassword, verifyPassword, verifyTotp } from '../src/s
 import { decryptToken, encryptToken, validShopDomain, verifyOAuthQuery, verifyWebhook } from '../src/shopify-security';
 import { decryptIntegrationCredentials, encryptIntegrationCredentials } from '../src/integration-security';
 import { weightedMovingAverageForecast } from '../src/analytics-math';
-import { exchangeCode } from '../src/shopify-client';
+import { exchangeCode, missingRequiredShopifyScopes, shopifyScopeError } from '../src/shopify-client';
 
 test('password hash verifies the correct password and rejects another', () => {
   const hash = hashPassword('a strong password 123!');
@@ -88,7 +88,7 @@ test('Shopify OAuth accepts complete expiring and non-expiring offline token res
   ];
   try {
     globalThis.fetch = async () => new Response(JSON.stringify(responses.shift()), { status: 200, headers: { 'content-type': 'application/json' } });
-    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-one')).scope, 'write_products,read_orders');
+    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-one')).scope, 'read_orders,write_products');
     assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-two')).expires_in, 3600);
   } finally {
     globalThis.fetch = previousFetch;
@@ -104,11 +104,21 @@ test('Shopify OAuth reads granted scopes from Admin GraphQL when token response 
       if (request === 1) return new Response(JSON.stringify({ access_token: 'token-three', scope: null, expires_in: 3600, refresh_token: 'refresh-three', refresh_token_expires_in: 7776000 }), { status: 200, headers: { 'content-type': 'application/json' } });
       return new Response(JSON.stringify({ data: { currentAppInstallation: { accessScopes: [{ handle: 'write_products' }, { handle: 'read_orders' }] } } }), { status: 200, headers: { 'content-type': 'application/json' } });
     };
-    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-three')).scope, 'write_products,read_orders');
+    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-three')).scope, 'read_orders,write_products');
     assert.equal(request, 2);
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test('Shopify scope diagnostics report required, granted and missing permissions', () => {
+  const granted = ['write_products', 'write_inventory', 'read_locations'];
+  assert.deepEqual(missingRequiredShopifyScopes(granted), ['read_orders', 'read_customers']);
+  const message = shopifyScopeError(granted);
+  assert.match(message || '', /ERP yêu cầu: write_products, read_orders, read_inventory, read_locations, read_customers/);
+  assert.match(message || '', /Shopify đã cấp: read_locations, write_inventory, write_products/);
+  assert.match(message || '', /Còn thiếu: read_orders, read_customers/);
+  assert.equal(shopifyScopeError(['write_products', 'write_orders', 'write_inventory', 'write_locations', 'write_customers']), null);
 });
 
 test('integration credentials are encrypted and authenticated', () => {
