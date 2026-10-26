@@ -110,6 +110,14 @@ function StoresView({ companyId, permissions, onError }: Props) {
   const [form, setForm] = useState({ name: '', shopifyDomain: '', currency: 'USD' });
   const load = useCallback(async () => { try { setStores(await api<Store[]>('/stores', {}, companyId)); } catch (e) { onError(e instanceof Error ? e.message : 'Không thể tải cửa hàng'); } }, [companyId, onError]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('shopify_error');
+    const connected = params.get('shopify') === 'connected';
+    if (error) onError(`Không thể kết nối Shopify: ${error}`);
+    if (connected) onError('Đã kết nối Shopify thành công. Dữ liệu đang được đưa vào hàng đợi đồng bộ.');
+    if (error || connected) window.history.replaceState({}, '', window.location.pathname);
+  }, [onError]);
   async function create(event: FormEvent) { event.preventDefault(); try { await api('/stores', { method: 'POST', body: JSON.stringify(form) }, companyId); setOpen(false); setForm({ name: '', shopifyDomain: '', currency: 'USD' }); await load(); } catch (e) { onError(e instanceof Error ? e.message : 'Không thể lưu store'); } }
   async function toggle(store: Store) { if (!confirm(`${store.status === 'DISABLED' ? 'Bật' : 'Tắt'} cấu hình ${store.name}?`)) return; try { await api(`/stores/${store.id}`, { method: 'PATCH', body: JSON.stringify({ status: store.status === 'DISABLED' ? 'DRAFT' : 'DISABLED' }) }, companyId); await load(); } catch (e) { onError(e instanceof Error ? e.message : 'Không thể cập nhật'); } }
   async function connect(store: Store) { try { setBusy(store.id); const result = await api<{ authorizationUrl: string }>(`/stores/${store.id}/shopify/connect`, { method: 'POST' }, companyId); window.location.assign(result.authorizationUrl); } catch (e) { setBusy(null); onError(e instanceof Error ? e.message : 'Không thể bắt đầu kết nối Shopify'); } }

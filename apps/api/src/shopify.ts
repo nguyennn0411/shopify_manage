@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, ForbiddenException, Get, Headers, Injectable, OnModuleDestroy, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Controller, ForbiddenException, Get, Headers, Injectable, Logger, OnModuleDestroy, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { Prisma, SyncKind } from '@erp/database';
 import { Queue } from 'bullmq';
 import { randomBytes } from 'node:crypto';
@@ -132,6 +132,7 @@ export class StoreShopifyController {
 
 @Controller('shopify')
 export class ShopifyCallbackController {
+  private readonly logger = new Logger(ShopifyCallbackController.name);
   constructor(private readonly shopify: ShopifyService) {}
   @Public() @Get('callback') async callback(@Query() query: Record<string, unknown>, @Res() response: Response) {
     try {
@@ -139,6 +140,7 @@ export class ShopifyCallbackController {
       response.redirect(`${process.env.APP_ORIGIN}/dashboard/stores?shopify=connected`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Shopify connection failed';
+      this.logger.error(`Shopify OAuth callback failed: ${message}`, error instanceof Error ? error.stack : undefined);
       response.redirect(`${process.env.APP_ORIGIN}/dashboard/stores?shopify_error=${encodeURIComponent(message.slice(0, 180))}`);
     }
   }
