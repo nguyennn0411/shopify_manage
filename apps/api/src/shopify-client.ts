@@ -13,7 +13,8 @@ export async function exchangeCode(shop: string, code: string): Promise<TokenRes
   });
   if (!response.ok) throw new Error(`Shopify OAuth exchange failed (${response.status})`);
   const token = await response.json() as TokenResponse;
-  if (!token.access_token || !token.scope || !token.refresh_token || !token.expires_in) throw new Error('Shopify did not issue an expiring offline token');
+  if (!token.access_token || !token.scope) throw new Error('Shopify returned an invalid offline token response');
+  if (Boolean(token.refresh_token) !== Boolean(token.expires_in)) throw new Error('Shopify returned incomplete token expiry metadata');
   return token;
 }
 
