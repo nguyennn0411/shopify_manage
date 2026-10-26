@@ -11,8 +11,20 @@ if (!process.env.DATABASE_URL || !process.env.REDIS_URL) throw new Error('DATABA
 
 const db = new PrismaClient();
 const connection = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
-const queueConnection = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
-const queue = new Queue('shopify-sync', { connection: queueConnection });
+
+type SyncTrace = (stage: string, details?: Record<string, unknown>) => void;
+
+function safeSyncError(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Unknown Shopify sync error';
+  return message
+    .replace(/shp[a-z]*_[A-Za-z0-9_-]+/gi, '[REDACTED]')
+    .replace(/(access[_ -]?token|client[_ -]?secret|authorization[_ -]?code)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .slice(0, 4000);
+}
+
+function writeSyncTrace(syncJobId: string, kind: string, stage: string, details: Record<string, unknown> = {}) {
+  console.log(JSON.stringify({ event: 'shopify.sync', syncJobId, kind, stage, ...details }));
+}
 
 type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 type ProductNode = {
@@ -142,55 +154,85 @@ async function upsertInventory(storeId: string, node: InventoryNode) {
   }
 }
 
-async function syncProducts(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>) {
+async function syncProducts(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>, trace: SyncTrace) {
   const store = await db.store.findUniqueOrThrow({ where: { id: storeId } });
   let cursor = initialCursor;
   do {
+    trace('shopify_request', { resource: 'products', hasCursor: Boolean(cursor) });
     const result = await graphql<{ products: Page<ProductNode> }>(db, connection, storeId,
       `query($after: String) { products(first: 50, after: $after, sortKey: UPDATED_AT) { nodes { ${PRODUCT_FIELDS} } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
+    trace('shopify_response', { resource: 'products', count: result.products.nodes.length, hasNextPage: result.products.pageInfo.hasNextPage });
     for (const node of result.products.nodes) await upsertProduct(storeId, store.currency, node);
     cursor = result.products.pageInfo.endCursor;
     await onPage(cursor, result.products.nodes.length);
+    trace('database_saved', { resource: 'products', count: result.products.nodes.length });
     if (!result.products.pageInfo.hasNextPage) break;
   } while (cursor);
 }
 
-async function syncOrders(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>) {
+async function syncOrders(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>, trace: SyncTrace) {
   let cursor = initialCursor;
   do {
+    trace('shopify_request', { resource: 'orders', hasCursor: Boolean(cursor) });
     const result = await graphql<{ orders: Page<OrderNode> }>(db, connection, storeId,
       `query($after: String) { orders(first: 50, after: $after, sortKey: UPDATED_AT) { nodes { ${ORDER_FIELDS} } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
+    trace('shopify_response', { resource: 'orders', count: result.orders.nodes.length, hasNextPage: result.orders.pageInfo.hasNextPage });
     for (const node of result.orders.nodes) await upsertOrder(storeId, node);
     cursor = result.orders.pageInfo.endCursor;
     await onPage(cursor, result.orders.nodes.length);
+    trace('database_saved', { resource: 'orders', count: result.orders.nodes.length });
     if (!result.orders.pageInfo.hasNextPage) break;
   } while (cursor);
 }
 
-async function syncInventory(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>) {
+async function syncInventory(storeId: string, initialCursor: string | null, onPage: (cursor: string | null, count: number) => Promise<void>, trace: SyncTrace) {
   let cursor = initialCursor;
   do {
+    trace('shopify_request', { resource: 'inventoryItems', hasCursor: Boolean(cursor) });
     const result = await graphql<{ inventoryItems: Page<InventoryNode> }>(db, connection, storeId,
       `query($after: String) { inventoryItems(first: 50, after: $after) { nodes { ${INVENTORY_FIELDS} } pageInfo { hasNextPage endCursor } } }`, { after: cursor });
+    trace('shopify_response', { resource: 'inventoryItems', count: result.inventoryItems.nodes.length, hasNextPage: result.inventoryItems.pageInfo.hasNextPage });
     for (const node of result.inventoryItems.nodes) await upsertInventory(storeId, node);
     cursor = result.inventoryItems.pageInfo.endCursor;
     await onPage(cursor, result.inventoryItems.nodes.length);
+    trace('database_saved', { resource: 'inventoryItems', count: result.inventoryItems.nodes.length });
     if (!result.inventoryItems.pageInfo.hasNextPage) break;
   } while (cursor);
 }
 
-async function processSync(syncJobId: string) {
-  const row = await db.syncJob.update({ where: { id: syncJobId }, data: { status: 'RUNNING', startedAt: new Date(), error: null } });
-  let processed = row.processed;
-  const onPage = async (cursor: string | null, count: number) => {
-    processed += count;
-    await db.syncJob.update({ where: { id: row.id }, data: { cursor, processed } });
-  };
-  if (row.kind === 'PRODUCTS') await syncProducts(row.storeId, row.cursor, onPage);
-  else if (row.kind === 'ORDERS') await syncOrders(row.storeId, row.cursor, onPage);
-  else if (row.kind === 'INVENTORY') await syncInventory(row.storeId, row.cursor, onPage);
-  else throw new Error(`Unsupported sync kind ${row.kind}`);
-  await db.syncJob.update({ where: { id: row.id }, data: { status: 'COMPLETED', cursor: null, completedAt: new Date() } });
+export async function processSync(syncJobId: string) {
+  let kind = 'UNKNOWN';
+  try {
+    const claimed = await db.syncJob.updateMany({ where: { id: syncJobId, status: 'QUEUED' },
+      data: { status: 'RUNNING', startedAt: new Date(), completedAt: null, error: null } });
+    if (!claimed.count) {
+      const current = await db.syncJob.findUnique({ where: { id: syncJobId } });
+      if (current?.status === 'RUNNING' || current?.status === 'COMPLETED') return current;
+      throw new Error(current ? `Sync job cannot run from status ${current.status}` : 'Sync job not found');
+    }
+    const row = await db.syncJob.findUniqueOrThrow({ where: { id: syncJobId } });
+    kind = row.kind;
+    const trace: SyncTrace = (stage, details) => writeSyncTrace(row.id, row.kind, stage, details);
+    trace('claimed', { resumed: Boolean(row.cursor), processed: row.processed });
+    let processed = row.processed;
+    const onPage = async (cursor: string | null, count: number) => {
+      processed += count;
+      await db.syncJob.update({ where: { id: row.id }, data: { cursor, processed } });
+    };
+    if (row.kind === 'PRODUCTS') await syncProducts(row.storeId, row.cursor, onPage, trace);
+    else if (row.kind === 'ORDERS') await syncOrders(row.storeId, row.cursor, onPage, trace);
+    else if (row.kind === 'INVENTORY') await syncInventory(row.storeId, row.cursor, onPage, trace);
+    else throw new Error(`Unsupported sync kind ${row.kind}`);
+    const completed = await db.syncJob.update({ where: { id: row.id }, data: { status: 'COMPLETED', cursor: null, completedAt: new Date(), error: null } });
+    trace('completed', { processed });
+    return completed;
+  } catch (error) {
+    const reason = safeSyncError(error);
+    await db.syncJob.updateMany({ where: { id: syncJobId, status: { in: ['QUEUED', 'RUNNING'] } },
+      data: { status: 'FAILED', error: reason, completedAt: new Date() } });
+    console.error(JSON.stringify({ event: 'shopify.sync', syncJobId, kind, stage: 'failed', reason }));
+    throw error;
+  }
 }
 
 function gid(resource: 'Product' | 'Order' | 'InventoryItem', raw: unknown) {
@@ -241,55 +283,63 @@ async function processWebhook(webhookEventId: string) {
 }
 
 type QueueData = { syncJobId?: string; webhookEventId?: string };
-const worker = new Worker<QueueData>('shopify-sync', async (job: Job<QueueData>) => {
-  if (job.name === 'sync' && job.data.syncJobId) return processSync(job.data.syncJobId);
-  if (job.name === 'webhook' && job.data.webhookEventId) return processWebhook(job.data.webhookEventId);
-  throw new Error('Invalid Shopify queue job');
-}, { connection, concurrency: 1 });
 
-worker.on('failed', async (job, error) => {
-  if (!job) return;
-  const finalAttempt = job.attemptsMade >= (job.opts.attempts || 1);
-  if (job.name === 'sync' && job.data.syncJobId) {
-    await db.syncJob.updateMany({ where: { id: job.data.syncJobId }, data: { status: finalAttempt ? 'FAILED' : 'QUEUED', error: error.message.slice(0, 4000) } });
-  } else if (job.name === 'webhook' && job.data.webhookEventId) {
-    await db.webhookEvent.updateMany({ where: { id: job.data.webhookEventId }, data: { status: finalAttempt ? 'FAILED' : 'RECEIVED', error: error.message.slice(0, 4000) } });
-  }
-});
+function startWorker() {
+  const queueConnection = new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
+  const queue = new Queue<QueueData>('shopify-sync', { connection: queueConnection });
+  const worker = new Worker<QueueData>('shopify-sync', async (job: Job<QueueData>) => {
+    if (job.name === 'sync' && job.data.syncJobId) return processSync(job.data.syncJobId);
+    if (job.name === 'webhook' && job.data.webhookEventId) return processWebhook(job.data.webhookEventId);
+    throw new Error('Invalid Shopify queue job');
+  }, { connection, concurrency: 1 });
 
-async function recoverPersistedWebhooks() {
-  const events = await db.webhookEvent.findMany({ where: { status: 'RECEIVED' }, select: { id: true }, orderBy: { receivedAt: 'asc' }, take: 500 });
-  for (const event of events) {
-    await queue.add('webhook', { webhookEventId: event.id }, { jobId: event.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
+  worker.on('failed', async (job, error) => {
+    if (!job) return;
+    const finalAttempt = job.attemptsMade >= (job.opts.attempts || 1);
+    if (job.name === 'sync' && job.data.syncJobId) {
+      await db.syncJob.updateMany({ where: { id: job.data.syncJobId }, data: { status: finalAttempt ? 'FAILED' : 'QUEUED',
+        error: safeSyncError(error), completedAt: finalAttempt ? new Date() : null } });
+    } else if (job.name === 'webhook' && job.data.webhookEventId) {
+      await db.webhookEvent.updateMany({ where: { id: job.data.webhookEventId }, data: { status: finalAttempt ? 'FAILED' : 'RECEIVED', error: safeSyncError(error) } });
+    }
+  });
+
+  async function recoverPersistedWebhooks() {
+    const events = await db.webhookEvent.findMany({ where: { status: 'RECEIVED' }, select: { id: true }, orderBy: { receivedAt: 'asc' }, take: 500 });
+    for (const event of events) {
+      await queue.add('webhook', { webhookEventId: event.id }, { jobId: event.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
+    }
+    const syncJobs = await db.syncJob.findMany({ where: { status: 'QUEUED' }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: 500 });
+    for (const syncJob of syncJobs) {
+      await queue.add('sync', { syncJobId: syncJob.id }, { jobId: syncJob.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
+    }
   }
-  const syncJobs = await db.syncJob.findMany({ where: { status: 'QUEUED' }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: 500 });
-  for (const syncJob of syncJobs) {
-    await queue.add('sync', { syncJobId: syncJob.id }, { jobId: syncJob.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
+
+  const recoveryTimer = setInterval(() => void recoverPersistedWebhooks(), 60_000);
+  void recoverPersistedWebhooks();
+  let alertsRunning = false;
+  async function evaluateAlerts() {
+    if (alertsRunning) return;
+    alertsRunning = true;
+    try {
+      const companies = await db.company.findMany({ where: { alertRules: { some: { enabled: true } } }, select: { id: true } });
+      for (const company of companies) await evaluateCompanyAlerts(db, company.id);
+    } finally { alertsRunning = false; }
   }
+  const alertTimer = setInterval(() => void evaluateAlerts(), 15 * 60_000);
+  void evaluateAlerts();
+
+  async function shutdown() {
+    clearInterval(recoveryTimer);
+    clearInterval(alertTimer);
+    await worker.close();
+    await queue.close();
+    await db.$disconnect();
+    await connection.quit();
+    await queueConnection.quit();
+  }
+  process.once('SIGINT', () => void shutdown().finally(() => process.exit(0)));
+  process.once('SIGTERM', () => void shutdown().finally(() => process.exit(0)));
 }
 
-const recoveryTimer = setInterval(() => void recoverPersistedWebhooks(), 60_000);
-void recoverPersistedWebhooks();
-let alertsRunning = false;
-async function evaluateAlerts() {
-  if (alertsRunning) return;
-  alertsRunning = true;
-  try {
-    const companies = await db.company.findMany({ where: { alertRules: { some: { enabled: true } } }, select: { id: true } });
-    for (const company of companies) await evaluateCompanyAlerts(db, company.id);
-  } finally { alertsRunning = false; }
-}
-const alertTimer = setInterval(() => void evaluateAlerts(), 15 * 60_000);
-void evaluateAlerts();
-
-async function shutdown() {
-  clearInterval(recoveryTimer);
-  clearInterval(alertTimer);
-  await worker.close();
-  await queue.close();
-  await db.$disconnect();
-  await connection.quit();
-  await queueConnection.quit();
-}
-process.once('SIGINT', () => void shutdown().finally(() => process.exit(0)));
-process.once('SIGTERM', () => void shutdown().finally(() => process.exit(0)));
+if (require.main === module) startWorker();

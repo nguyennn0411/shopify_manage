@@ -1,17 +1,20 @@
 import { BadRequestException, Controller, ForbiddenException, Get, Headers, Injectable, Logger, OnModuleDestroy, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { Prisma, SyncKind } from '@erp/database';
+import { waitUntil } from '@vercel/functions';
 import { Queue } from 'bullmq';
 import { randomBytes } from 'node:crypto';
 import type { Response } from 'express';
 import { actor, AppRequest, DatabaseService, Public, RedisService, RequireStorePermission } from './core';
 import { exchangeCode, graphqlWithToken, REQUIRED_SCOPES, saveToken, shopifyScopeError } from './shopify-client';
 import { validShopDomain, verifyOAuthQuery, verifyWebhook } from './shopify-security';
+import { processSync } from './worker';
 
 const WEBHOOK_TOPICS = ['PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE', 'ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED', 'ORDERS_DELETE', 'REFUNDS_CREATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'INVENTORY_LEVELS_UPDATE', 'APP_UNINSTALLED'];
 
 @Injectable()
 export class ShopifyService implements OnModuleDestroy {
   readonly queue: Queue;
+  private readonly logger = new Logger(ShopifyService.name);
   constructor(private readonly db: DatabaseService, private readonly redis: RedisService) {
     this.queue = new Queue('shopify-sync', { connection: redis.duplicate({ maxRetriesPerRequest: 1, enableOfflineQueue: false }) });
   }
@@ -66,7 +69,7 @@ export class ShopifyService implements OnModuleDestroy {
       await tx.auditLog.create({ data: { companyId: store.companyId, actorId: saved.actorId, action: 'shopify.connect', resourceType: 'store', resourceId: store.id,
         metadata: { scopes: token.scope.split(',') } } });
     });
-    for (const kind of ['PRODUCTS', 'ORDERS', 'INVENTORY'] as SyncKind[]) await this.enqueue(store.id, kind);
+    await this.enqueueMany(store.id, ['PRODUCTS', 'ORDERS', 'INVENTORY']);
     return store.id;
   }
   private async registerWebhooks(shop: string, token: string) {
@@ -81,10 +84,40 @@ export class ShopifyService implements OnModuleDestroy {
       if (errors.length && !errors.every(x => /already|taken|exists/i.test(x))) throw new Error(`Shopify webhook ${topic}: ${errors.join('; ')}`);
     }
   }
+  private async dispatchSync(rows: Array<{ id: string; kind: SyncKind }>) {
+    if (process.env.VERCEL) {
+      this.logger.log(JSON.stringify({ event: 'shopify.sync.dispatch', runtime: 'vercel-wait-until', jobs: rows.map(row => ({ id: row.id, kind: row.kind })) }));
+      try {
+        waitUntil((async () => {
+          for (const row of rows) {
+            try { await processSync(row.id); }
+            catch { /* processSync persists and logs a redacted FAILED reason. */ }
+          }
+        })());
+      } catch {
+        const reason = 'Không thể khởi tạo background task trên Vercel';
+        await this.db.syncJob.updateMany({ where: { id: { in: rows.map(row => row.id) }, status: 'QUEUED' },
+          data: { status: 'FAILED', error: `Không thể giao tác vụ cho Vercel background worker: ${reason}`, completedAt: new Date() } });
+        throw new Error(reason);
+      }
+      return;
+    }
+    for (const row of rows) {
+      try {
+        await this.queue.add('sync', { syncJobId: row.id }, { jobId: row.id, attempts: 5,
+          backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 });
+      } catch {
+        this.logger.warn(`Không thể đưa sync job ${row.id} vào BullMQ; worker sẽ thử phục hồi hàng đợi`);
+      }
+    }
+  }
+  private async enqueueMany(storeId: string, kinds: SyncKind[]) {
+    const rows = await this.db.$transaction(kinds.map(kind => this.db.syncJob.create({ data: { storeId, kind } })));
+    await this.dispatchSync(rows);
+    return rows;
+  }
   async enqueue(storeId: string, kind: SyncKind) {
-    const row = await this.db.syncJob.create({ data: { storeId, kind } });
-    try { await this.queue.add('sync', { syncJobId: row.id }, { jobId: row.id, attempts: 5, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 1000 }); }
-    catch { /* The worker recovers QUEUED rows after Redis returns. */ }
+    const [row] = await this.enqueueMany(storeId, [kind]);
     return row;
   }
   async manualSync(req: AppRequest, storeId: string, kind: SyncKind) {
@@ -93,17 +126,24 @@ export class ShopifyService implements OnModuleDestroy {
     if (!['PRODUCTS', 'ORDERS', 'INVENTORY'].includes(kind)) throw new BadRequestException('Loại đồng bộ không hợp lệ');
     return this.enqueue(store.id, kind);
   }
+  async fullSync(req: AppRequest, storeId: string) {
+    const store = await this.store(req, storeId);
+    if (store.status !== 'CONNECTED') throw new BadRequestException('Store chưa kết nối Shopify');
+    return this.enqueueMany(store.id, ['PRODUCTS', 'ORDERS', 'INVENTORY']);
+  }
   async jobs(req: AppRequest, storeId: string) {
     await this.store(req, storeId);
+    await this.db.syncJob.updateMany({ where: { storeId, status: 'QUEUED', createdAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+      data: { status: 'FAILED', completedAt: new Date(), error: 'Không có worker production nhận tác vụ trong 5 phút. Hãy bấm Thử lại để chạy bằng cơ chế background mới.' } });
     return this.db.syncJob.findMany({ where: { storeId }, orderBy: { createdAt: 'desc' }, take: 50 });
   }
   async retry(req: AppRequest, storeId: string, id: string) {
     await this.store(req, storeId);
     const row = await this.db.syncJob.findFirst({ where: { id, storeId, status: 'FAILED' } });
     if (!row) throw new BadRequestException('Sync job không ở trạng thái lỗi');
-    await this.db.syncJob.update({ where: { id }, data: { status: 'QUEUED', error: null } });
-    await this.queue.add('sync', { syncJobId: row.id }, { jobId: `${row.id}-${Date.now()}`, attempts: 5, backoff: { type: 'exponential', delay: 2000 } });
-    return { queued: true };
+    const queued = await this.db.syncJob.update({ where: { id }, data: { status: 'QUEUED', error: null, startedAt: null, completedAt: null } });
+    await this.dispatchSync([queued]);
+    return { queued: true, id: queued.id };
   }
   async webhook(req: AppRequest, hmac: string | undefined, webhookId: string | undefined, topic: string | undefined, shop: string | undefined) {
     if (!req.rawBody || !hmac || !process.env.SHOPIFY_CLIENT_SECRET || !verifyWebhook(req.rawBody, hmac, process.env.SHOPIFY_CLIENT_SECRET)) throw new ForbiddenException('Webhook HMAC không hợp lệ');
@@ -126,6 +166,7 @@ export class StoreShopifyController {
   constructor(private readonly shopify: ShopifyService) {}
   @Post('connect') @RequireStorePermission('stores.write') connect(@Req() req: AppRequest, @Param('storeId') id: string) { return this.shopify.connect(req, id); }
   @Get('sync-jobs') @RequireStorePermission('stores.read') jobs(@Req() req: AppRequest, @Param('storeId') id: string) { return this.shopify.jobs(req, id); }
+  @Post('sync') @RequireStorePermission('stores.write') fullSync(@Req() req: AppRequest, @Param('storeId') id: string) { return this.shopify.fullSync(req, id); }
   @Post('sync/:kind') @RequireStorePermission('stores.write') sync(@Req() req: AppRequest, @Param('storeId') id: string, @Param('kind') kind: SyncKind) { return this.shopify.manualSync(req, id, kind); }
   @Post('sync-jobs/:id/retry') @RequireStorePermission('stores.write') retry(@Req() req: AppRequest, @Param('storeId') storeId: string, @Param('id') id: string) { return this.shopify.retry(req, storeId, id); }
 }
