@@ -101,7 +101,7 @@ Tất cả migration đã được áp dụng thành công vào PostgreSQL local
 
 ## Cấu hình ngoài cần có để chạy live
 
-- Shopify: client ID/secret, token encryption key, callback URL và webhook URL HTTPS công khai; app scopes gồm `write_products` cho PIM và protected customer data phải được Shopify cấp. Store đã cấp bộ scope cũ cần reconnect.
+- Shopify: client ID/secret, token encryption key, callback URL và webhook URL HTTPS công khai; app scopes tối thiểu gồm `write_products,read_orders,read_all_orders,read_inventory,read_locations,read_customers`, và protected customer data phải được Shopify cấp. Store đã cấp bộ scope cũ cần reconnect.
 - Marketing: account/advertiser ID và OAuth/access credential thật cho từng nền tảng; Meta API version đặt trong environment.
 - Production: PostgreSQL/Redis managed, TLS, secret manager, backup/restore, log/metrics/alerting và quy trình rotate credential.
 

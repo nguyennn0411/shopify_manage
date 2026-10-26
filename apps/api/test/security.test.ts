@@ -113,12 +113,12 @@ test('Shopify OAuth reads granted scopes from Admin GraphQL when token response 
 
 test('Shopify scope diagnostics report required, granted and missing permissions', () => {
   const granted = ['write_products', 'write_inventory', 'read_locations'];
-  assert.deepEqual(missingRequiredShopifyScopes(granted), ['read_orders', 'read_customers']);
+  assert.deepEqual(missingRequiredShopifyScopes(granted), ['read_orders', 'read_all_orders', 'read_customers']);
   const message = shopifyScopeError(granted);
-  assert.match(message || '', /ERP yêu cầu: write_products, read_orders, read_inventory, read_locations, read_customers/);
+  assert.match(message || '', /ERP yêu cầu: write_products, read_orders, read_all_orders, read_inventory, read_locations, read_customers/);
   assert.match(message || '', /Shopify đã cấp: read_locations, write_inventory, write_products/);
-  assert.match(message || '', /Còn thiếu: read_orders, read_customers/);
-  assert.equal(shopifyScopeError(['write_products', 'write_orders', 'write_inventory', 'write_locations', 'write_customers']), null);
+  assert.match(message || '', /Còn thiếu: read_orders, read_all_orders, read_customers/);
+  assert.equal(shopifyScopeError(['write_products', 'write_orders', 'read_all_orders', 'write_inventory', 'write_locations', 'write_customers']), null);
 });
 
 test('integration credentials are encrypted and authenticated', () => {

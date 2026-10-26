@@ -30,7 +30,7 @@ npm run test
 
 API yêu cầu header `x-company-id` cho endpoint nghiệp vụ. Frontend tự gửi header theo công ty được chọn. Session được lưu trong Redis, cookie chỉ đọc bởi server, `SameSite=Lax`; request ghi có kiểm tra `Origin`. Đặt `APP_ORIGIN` chính xác theo URL web và `SESSION_COOKIE_SECURE=true` khi chạy HTTPS. Toàn bộ khóa, token, database URL và thông tin bootstrap phải lưu trong secret store của môi trường deploy, không commit vào Git.
 
-Để kết nối dữ liệu thật, cấu hình Shopify app và URL HTTPS công khai theo `.env.example`. PIM cần scope Shopify `write_products`; store đã kết nối bằng phiên bản cũ cần reconnect để cấp scope mới. Meta Ads, Google Ads và TikTok Ads được thêm trong màn hình **BI & tự động hóa**; credential được mã hóa AES-256-GCM trong database và không được trả lại qua API.
+Để kết nối dữ liệu thật, cấu hình Shopify app và URL HTTPS công khai theo `.env.example`. Shopify app cần các scope tối thiểu `write_products,read_orders,read_all_orders,read_inventory,read_locations,read_customers`; store đã kết nối bằng phiên bản cũ cần reconnect để cấp scope mới. Meta Ads, Google Ads và TikTok Ads được thêm trong màn hình **BI & tự động hóa**; credential được mã hóa AES-256-GCM trong database và không được trả lại qua API.
 
 ## Phạm vi theo tài liệu
 

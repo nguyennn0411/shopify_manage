@@ -3,7 +3,7 @@ import Redis from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import { decryptToken, encryptToken, validShopDomain } from './shopify-security';
 
-export const REQUIRED_SCOPES = ['write_products', 'read_orders', 'read_inventory', 'read_locations', 'read_customers'];
+export const REQUIRED_SCOPES = ['write_products', 'read_orders', 'read_all_orders', 'read_inventory', 'read_locations', 'read_customers'];
 type TokenResponse = { access_token: string; scope: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number };
 type RawTokenResponse = Omit<TokenResponse, 'scope'> & { scope?: unknown };
 
