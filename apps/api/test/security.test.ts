@@ -95,6 +95,22 @@ test('Shopify OAuth accepts complete expiring and non-expiring offline token res
   }
 });
 
+test('Shopify OAuth reads granted scopes from Admin GraphQL when token response scope is empty', async () => {
+  const previousFetch = globalThis.fetch;
+  let request = 0;
+  try {
+    globalThis.fetch = async () => {
+      request += 1;
+      if (request === 1) return new Response(JSON.stringify({ access_token: 'token-three', scope: null, expires_in: 3600, refresh_token: 'refresh-three', refresh_token_expires_in: 7776000 }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ data: { currentAppInstallation: { accessScopes: [{ handle: 'write_products' }, { handle: 'read_orders' }] } } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    assert.equal((await exchangeCode('valid-store.myshopify.com', 'code-three')).scope, 'write_products,read_orders');
+    assert.equal(request, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('integration credentials are encrypted and authenticated', () => {
   const before = process.env.INTEGRATION_ENCRYPTION_KEY;
   process.env.INTEGRATION_ENCRYPTION_KEY = 'cd'.repeat(32);

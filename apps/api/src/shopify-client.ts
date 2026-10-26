@@ -5,6 +5,7 @@ import { decryptToken, encryptToken, validShopDomain } from './shopify-security'
 
 export const REQUIRED_SCOPES = ['write_products', 'read_orders', 'read_inventory', 'read_locations', 'read_customers'];
 type TokenResponse = { access_token: string; scope: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number };
+type RawTokenResponse = Omit<TokenResponse, 'scope'> & { scope?: unknown };
 
 function safeResponseFields(value: unknown): string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'none';
@@ -40,12 +41,20 @@ export async function exchangeCode(shop: string, code: string): Promise<TokenRes
     const description = safeErrorValue(payload?.error_description ?? payload?.errors, redactions);
     throw new Error(`Shopify OAuth exchange failed (HTTP ${response.status}; error=${errorCode || 'none'}; description=${description || 'none'}; fields=${fields})`);
   }
-  const token = payload as TokenResponse | null;
-  const scope = typeof token?.scope === 'string' ? token.scope.split(',').map(value => value.trim()).filter(Boolean) : [];
-  if (!token || typeof token.access_token !== 'string' || !token.access_token || scope.length === 0) {
-    throw new Error(`Shopify returned an invalid offline token response (HTTP ${response.status}; fields=${fields}; hasAccessToken=${Boolean(token?.access_token)}; scopeCount=${scope.length})`);
+  const rawToken = payload as RawTokenResponse | null;
+  if (!rawToken || typeof rawToken.access_token !== 'string' || !rawToken.access_token) {
+    throw new Error(`Shopify returned an invalid offline token response (HTTP ${response.status}; fields=${fields}; hasAccessToken=${Boolean(rawToken?.access_token)})`);
   }
-  token.scope = scope.join(',');
+  let scope = typeof rawToken.scope === 'string'
+    ? rawToken.scope.split(',').map(value => value.trim()).filter(Boolean)
+    : Array.isArray(rawToken.scope) ? rawToken.scope.filter((value): value is string => typeof value === 'string' && value.length > 0) : [];
+  if (scope.length === 0) {
+    const installation = await graphqlWithToken<{ currentAppInstallation: { accessScopes: Array<{ handle: string }> } }>(shop, rawToken.access_token,
+      '{ currentAppInstallation { accessScopes { handle } } }');
+    scope = installation.currentAppInstallation.accessScopes.map(item => item.handle).filter(Boolean);
+  }
+  if (scope.length === 0) throw new Error(`Shopify token has no granted Admin API scopes (HTTP ${response.status}; fields=${fields})`);
+  const token: TokenResponse = { ...rawToken, scope: [...new Set(scope)].join(',') };
   const expiryFieldCount = [token.expires_in, token.refresh_token, token.refresh_token_expires_in].filter(value => value !== undefined && value !== null).length;
   if (expiryFieldCount !== 0 && expiryFieldCount !== 3) throw new Error(`Shopify returned incomplete token expiry metadata (HTTP ${response.status}; fields=${fields})`);
   if (expiryFieldCount === 3 && (!(Number.isFinite(token.expires_in) && token.expires_in! > 0) || typeof token.refresh_token !== 'string' || !token.refresh_token || !(Number.isFinite(token.refresh_token_expires_in) && token.refresh_token_expires_in! > 0))) {
