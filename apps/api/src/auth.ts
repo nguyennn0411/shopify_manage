@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Post, Req, 
 import { IsEmail, IsString, Length } from 'class-validator';
 import type { Request, Response } from 'express';
 import { DatabaseService, Public, RedisService, SessionService, AppRequest, SessionData } from './core';
-import { decryptSecret, encryptSecret, hashPassword, newTotpSecret, verifyPassword, verifyTotp } from './security';
+import { csrfTokenForSession, decryptSecret, encryptSecret, hashPassword, newTotpSecret, verifyPassword, verifyTotp } from './security';
 
 class LoginDto {
   @IsEmail() email!: string;
@@ -25,8 +25,9 @@ export class AuthService {
     const attempts = await this.redis.incr(key);
     if (attempts === 1) await this.redis.expire(key, 900);
     if (attempts > 8) throw new HttpException('Thử lại sau 15 phút', HttpStatus.TOO_MANY_REQUESTS);
-    const user = await this.db.user.findUnique({ where: { email }, include: { assignments: { include: { role: { include: { permissions: true } } } } } });
+    const user = await this.db.user.findUnique({ where: { email }, include: { memberships: { select: { companyId: true } }, assignments: { include: { role: { include: { permissions: true } } } } } });
     if (!user || user.status !== 'ACTIVE' || !verifyPassword(dto.password, user.passwordHash)) {
+      if (user) await this.audit(user.id, user.memberships.map(item => item.companyId), 'AUTH_LOGIN_FAILED', request);
       throw new UnauthorizedException('Email hoặc mật khẩu không đúng');
     }
     await this.redis.del(key);
@@ -35,7 +36,10 @@ export class AuthService {
     await this.sessions.destroy(request.cookies?.erp_session);
     const token = await this.sessions.create({ userId: user.id, version: user.sessionVersion, state, createdAt: Date.now() });
     this.setCookie(response, token);
-    if (state === 'active') await this.db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    if (state === 'active') {
+      await this.db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), ...(!user.passwordHash.startsWith('$2') ? { passwordHash: hashPassword(dto.password) } : {}) } });
+      await this.audit(user.id, user.memberships.map(item => item.companyId), 'AUTH_LOGIN_SUCCEEDED', request);
+    }
     return { next: state === 'mfa-enroll' ? 'mfa-setup' : state === 'mfa-required' ? 'mfa-verify' : 'app' };
   }
 
@@ -57,6 +61,7 @@ export class AuthService {
     await this.redis.del(`mfa-setup:${data.userId}`);
     await this.redis.del(`mfa-attempt:${data.userId}`);
     await this.sessions.update(request.cookies.erp_session, { ...data, state: 'active' });
+    await this.audit(data.userId, await this.companyIds(data.userId), 'AUTH_MFA_ENROLLED', request);
     return { next: 'app' };
   }
 
@@ -68,13 +73,26 @@ export class AuthService {
     await this.redis.del(`mfa-attempt:${data.userId}`);
     await this.sessions.update(request.cookies.erp_session, { ...data, state: 'active' });
     await this.db.user.update({ where: { id: data.userId }, data: { lastLoginAt: new Date() } });
+    await this.audit(data.userId, await this.companyIds(data.userId), 'AUTH_LOGIN_SUCCEEDED', request);
     return { next: 'app' };
   }
 
   async logout(request: Request, response: Response) {
+    const session = await this.sessions.read(request.cookies?.erp_session);
+    if (session) await this.audit(session.userId, await this.companyIds(session.userId), 'AUTH_LOGOUT', request);
     await this.sessions.destroy(request.cookies?.erp_session);
     response.clearCookie('erp_session', { path: '/' });
+    response.clearCookie('erp_csrf', { path: '/' });
     return { ok: true };
+  }
+
+  async csrf(request: Request, response: Response) {
+    const token = request.cookies?.erp_session;
+    const session = await this.sessions.read(token);
+    if (!token || !session) throw new UnauthorizedException('Phiên đăng nhập không hợp lệ');
+    const csrf = csrfTokenForSession(token);
+    response.cookie('erp_csrf', csrf, { httpOnly: false, sameSite: 'strict', secure: process.env.SESSION_COOKIE_SECURE === 'true', path: '/', maxAge: 12 * 60 * 60 * 1000 });
+    return { csrfToken: csrf };
   }
 
   async me(request: AppRequest) {
@@ -109,6 +127,17 @@ export class AuthService {
   }
   private setCookie(response: Response, token: string) {
     response.cookie('erp_session', token, { httpOnly: true, sameSite: 'lax', secure: process.env.SESSION_COOKIE_SECURE === 'true', path: '/', maxAge: 12 * 60 * 60 * 1000 });
+    response.cookie('erp_csrf', csrfTokenForSession(token), { httpOnly: false, sameSite: 'strict', secure: process.env.SESSION_COOKIE_SECURE === 'true', path: '/', maxAge: 12 * 60 * 60 * 1000 });
+  }
+
+  private async companyIds(userId: string) {
+    return (await this.db.companyMembership.findMany({ where: { userId }, select: { companyId: true } })).map(item => item.companyId);
+  }
+  private async audit(userId: string, companyIds: string[], action: string, request: Request) {
+    await Promise.all(companyIds.map(companyId => this.db.auditLog.create({ data: {
+      companyId, actorId: userId, action, resourceType: 'SESSION', resourceId: userId,
+      metadata: { ip: request.ip || 'unknown', userAgent: String(request.headers['user-agent'] || '').slice(0, 200) },
+    } })));
   }
 }
 
@@ -120,6 +149,7 @@ export class AuthController {
   @Public() @Post('mfa/confirm') confirm(@Req() req: Request, @Res({ passthrough: true }) res: Response, @Body() dto: CodeDto) { return this.auth.confirm(req, res, dto.code); }
   @Public() @Post('mfa/verify') verify(@Req() req: Request, @Body() dto: CodeDto) { return this.auth.verify(req, dto.code); }
   @Public() @Post('logout') logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) { return this.auth.logout(req, res); }
+  @Public() @Get('csrf') csrf(@Req() req: Request, @Res({ passthrough: true }) res: Response) { return this.auth.csrf(req, res); }
   @Get('me') me(@Req() req: AppRequest) { return this.auth.me(req); }
   @Post('password') password(@Req() req: AppRequest, @Body() dto: ChangePasswordDto) { return this.auth.changePassword(req, dto); }
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createHmac } from 'node:crypto';
-import { base32Encode, hashPassword, verifyPassword, verifyTotp } from '../src/security';
+import { base32Encode, csrfTokenForSession, hashPassword, verifyCsrfToken, verifyPassword, verifyTotp } from '../src/security';
 import { decryptToken, encryptToken, validShopDomain, verifyOAuthQuery, verifyWebhook } from '../src/shopify-security';
 import { decryptIntegrationCredentials, encryptIntegrationCredentials } from '../src/integration-security';
 import { weightedMovingAverageForecast } from '../src/analytics-math';
@@ -9,8 +9,22 @@ import { exchangeCode, missingRequiredShopifyScopes, shopifyScopeError } from '.
 
 test('password hash verifies the correct password and rejects another', () => {
   const hash = hashPassword('a strong password 123!');
+  assert.match(hash, /^\$2[aby]\$12\$/);
   assert.equal(verifyPassword('a strong password 123!', hash), true);
   assert.equal(verifyPassword('wrong password', hash), false);
+});
+
+test('CSRF token is bound to the opaque session and rejects tampering', () => {
+  const previous = process.env.CSRF_SECRET;
+  process.env.CSRF_SECRET = 'cd'.repeat(32);
+  try {
+    const token = csrfTokenForSession('opaque-session-token');
+    assert.equal(verifyCsrfToken('opaque-session-token', token), true);
+    assert.equal(verifyCsrfToken('different-session-token', token), false);
+    assert.equal(verifyCsrfToken('opaque-session-token', `${token}x`), false);
+  } finally {
+    if (previous === undefined) delete process.env.CSRF_SECRET; else process.env.CSRF_SECRET = previous;
+  }
 });
 
 test('TOTP accepts current code and rejects an invalid one', () => {

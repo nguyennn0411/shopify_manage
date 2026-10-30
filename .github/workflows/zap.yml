@@ -1,0 +1,21 @@
+name: OWASP ZAP baseline
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: HTTPS URL của môi trường staging được phép kiểm thử
+        required: true
+        type: string
+permissions:
+  contents: read
+  issues: write
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ inputs.target }}
+          rules_file_name: .zap/rules.tsv
+          fail_action: true

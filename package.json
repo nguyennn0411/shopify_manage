@@ -2,19 +2,37 @@
   "name": "shopify-company-erp",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently -n api,worker,web -c blue,green,magenta \"npm run dev -w @erp/api\" \"npm run dev:worker -w @erp/api\" \"npm run dev -w @erp/web\"",
     "lint": "npm run lint -w @erp/api && npm run lint -w @erp/web",
     "typecheck": "npm run typecheck -w @erp/api && npm run typecheck -w @erp/web",
     "build": "npm run db:generate && npm run build -w @erp/api && npm run build -w @erp/web",
-    "test": "npm run test -w @erp/api",
+    "test": "npm run test -w @erp/api && npm run test -w @erp/web",
     "db:generate": "npm run generate -w @erp/database",
     "db:migrate": "npm run migrate -w @erp/database",
     "db:seed": "npm run seed -w @erp/database"
   },
   "devDependencies": {
+    "body-parser": "^2.4.0",
     "concurrently": "^9.1.2",
+    "deepmerge-ts": "^8.0.2",
+    "fast-uri": "^3.1.9",
+    "js-yaml": "^5.5.0",
+    "multer": "^2.5.0",
+    "postcss": "^8.5.32",
     "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "body-parser": "$body-parser",
+    "deepmerge-ts": "$deepmerge-ts",
+    "fast-uri": "$fast-uri",
+    "js-yaml": "$js-yaml",
+    "multer": "$multer",
+    "postcss": "$postcss",
+    "zod": "4.6.7"
   }
 }

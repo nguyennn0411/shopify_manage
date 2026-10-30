@@ -1,16 +1,34 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { compareSync, hashSync } from 'bcryptjs';
 
 export function hashPassword(password: string): string {
   if (password.length < 12) throw new Error('Password must have at least 12 characters');
-  const salt = randomBytes(16).toString('hex');
-  return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
+  return hashSync(password, 12);
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
+  if (stored.startsWith('$2a$') || stored.startsWith('$2b$') || stored.startsWith('$2y$')) return compareSync(password, stored);
+  // Legacy scrypt hashes remain valid and are upgraded to BCrypt after a successful login.
   const [salt, expectedHex] = stored.split(':');
   if (!salt || !expectedHex || expectedHex.length !== 128) return false;
   const actual = scryptSync(password, salt, 64);
   return timingSafeEqual(actual, Buffer.from(expectedHex, 'hex'));
+}
+
+function csrfSecret(): string {
+  const value = process.env.CSRF_SECRET || '';
+  if (!/^[a-fA-F0-9]{64}$/.test(value)) throw new Error('CSRF_SECRET must be 64 hex characters');
+  return value;
+}
+
+export function csrfTokenForSession(sessionToken: string): string {
+  return createHmac('sha256', Buffer.from(csrfSecret(), 'hex')).update(sessionToken).digest('base64url');
+}
+
+export function verifyCsrfToken(sessionToken: string, token: string): boolean {
+  const expected = Buffer.from(csrfTokenForSession(sessionToken));
+  const actual = Buffer.from(token);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';

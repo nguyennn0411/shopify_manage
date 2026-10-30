@@ -13,6 +13,7 @@ import { OperationsView } from './operations-view';
 import { PeopleView } from './people-view';
 import { AnalyticsView } from './analytics-view';
 import { LifecycleView } from './lifecycle-view';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const links = [
   { href: '/dashboard', label: 'Tổng quan', icon: LayoutDashboard, permission: 'company.read' },
@@ -43,22 +44,25 @@ const title: Record<Section, string> = { overview: 'Tổng quan', stores: 'Shopi
 
 export function ErpShell({ section }: { section: Section }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const pathname = usePathname();
-  const [me, setMe] = useState<Me | null>(null);
   const [companyId, setCompanyId] = useState('');
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dark, setDark] = useState(false);
+  const meQuery = useQuery({ queryKey: ['auth', 'me'], queryFn: () => api<Me>('/auth/me'), retry: false });
+  const me = meQuery.data || null;
   useEffect(() => {
     const saved = localStorage.getItem('erp-theme') === 'dark';
     setDark(saved); document.documentElement.classList.toggle('dark', saved);
-    api<Me>('/auth/me').then(user => {
-      setMe(user);
+  }, []);
+  useEffect(() => {
+    if (me) {
       const savedCompany = localStorage.getItem('erp-company');
-      const first = user.memberships.find(x => x.company.id === savedCompany)?.company.id || user.memberships[0]?.company.id || '';
-      setCompanyId(first);
-    }).catch(() => router.replace('/login'));
-  }, [router]);
+      const first = me.memberships.find(x => x.company.id === savedCompany)?.company.id || me.memberships[0]?.company.id || '';
+      setCompanyId(current => current || first);
+    }
+  }, [me]);
   const company = me?.memberships.find(x => x.company.id === companyId)?.company;
   const globalPermissions = useMemo(() => new Set(me?.assignments.filter(a => a.companyId === companyId && !a.storeId).flatMap(a => a.role.permissions.map(p => p.permissionCode)) || []), [me, companyId]);
   const permissions = useMemo(() => new Set(me?.assignments.filter(a => a.companyId === companyId).flatMap(a => a.role.permissions.map(p => p.permissionCode)) || []), [me, companyId]);
@@ -67,7 +71,8 @@ export function ErpShell({ section }: { section: Section }) {
   const selectedPermissions = selectedLink && 'scope' in selectedLink ? selectedLink.scope === 'store' ? permissions : warehousePermissions : globalPermissions;
   const canView = section === 'overview' ? globalPermissions.has('company.read') : !!selectedLink && selectedPermissions.has(selectedLink.permission);
   function toggleTheme() { const next = !dark; setDark(next); localStorage.setItem('erp-theme', next ? 'dark' : 'light'); document.documentElement.classList.toggle('dark', next); }
-  async function logout() { try { await api('/auth/logout', { method: 'POST' }); } finally { router.replace('/login'); } }
+  async function logout() { try { await api('/auth/logout', { method: 'POST' }); } finally { queryClient.clear(); router.replace('/login'); } }
+  if (meQuery.isError) return <div className="flex min-h-screen items-center justify-center bg-canvas text-muted">Phiên đã hết hạn. Đang chuyển về đăng nhập…</div>;
   if (!me) return <div className="flex min-h-screen items-center justify-center bg-canvas text-muted">Đang tải không gian làm việc…</div>;
   return <div className="min-h-screen bg-canvas lg:pl-[258px]">
     {menuOpen && <button aria-label="Đóng menu" className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setMenuOpen(false)} />}
