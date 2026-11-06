@@ -14,7 +14,7 @@
     "dotenv": "^16.6.1"
   },
   "devDependencies": {
-    "prisma": "^6.19.0",
+    "prisma": "^7.10.1",
     "tsx": "^4.20.3"
   }
 }
