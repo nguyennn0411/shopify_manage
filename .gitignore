@@ -8,6 +8,9 @@ dist/
 coverage/
 *.tsbuildinfo
 packages/database/generated/
+.claude-memory/
+**/.idea/
+**/target/
 
 
 .vercel

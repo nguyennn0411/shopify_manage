@@ -1,0 +1,23 @@
+.git/
+.vercel/
+.npm-cache/
+.claude-memory/
+node_modules/
+**/node_modules/
+**/.next/
+**/dist/
+**/target/
+**/.idea/
+.env*
+coverage/
+*.tsbuildinfo
+
+# Legacy and local-only deployment assets are not needed by Vercel Services.
+apps/api/
+apps/web/
+packages/
+infra/cloudflare/
+infra/mysql/
+infra/nginx/
+docker-compose.yml
+docs/

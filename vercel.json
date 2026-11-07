@@ -1,0 +1,48 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "services": {
+    "frontend": {
+      "root": "apps/frontend",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    },
+    "backend": {
+      "root": "apps/backend",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "keycloak",
+          "format": "url",
+          "env": "KEYCLOAK_INTERNAL_URL"
+        }
+      ]
+    },
+    "keycloak": {
+      "root": "infra/keycloak",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
+    { "source": "/oauth2/(.*)", "destination": { "service": "backend" } },
+    { "source": "/login/oauth2/(.*)", "destination": { "service": "backend" } },
+    { "source": "/logout", "destination": { "service": "backend" } },
+    { "source": "/auth/(.*)", "destination": { "service": "keycloak" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=()" }
+      ]
+    }
+  ]
+}

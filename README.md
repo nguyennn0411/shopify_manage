@@ -1,37 +1,38 @@
-# Company ERP
+# Company ERP — Separate Frontend and Backend Monoliths
 
-Monorepo cho hệ thống quản trị công ty bán hàng qua Shopify, triển khai đủ Phase 1–7 của tài liệu thiết kế và bộ module vòng đời sản phẩm: Supplier Management, Procurement, PIM và Fulfillment. Hệ thống không tạo dữ liệu bán hàng giả; dữ liệu production đến từ Shopify, nghiệp vụ ERP hoặc các connector đã cấu hình.
+ERP gồm hai ứng dụng monolith độc lập, không phải microservices và không đóng gói chung một artefact:
 
-## Cấu trúc
+- `apps/frontend`: React 19 monolith, tổ chức theo `app`, `core`, `features` và `layout`; build thành một SPA/container riêng.
+- `apps/backend`: Spring Boot modular monolith, tổ chức theo domain `identity`, `company`, `dashboard`, `audit` và nền tảng dùng chung `platform`; build thành một JAR/container riêng.
+- `infra/nginx`: single-origin reverse proxy và security headers cho môi trường Docker local/self-hosted.
+- `infra/keycloak`: realm, MFA TOTP và permission roles. Không chứa user hoặc credential production.
+- PostgreSQL lưu dữ liệu nghiệp vụ trong schema `erp_v2`; Redis lưu session và rate-limit counter.
+- HR domain gồm hồ sơ, tuyển dụng, onboarding, chấm công, nghỉ phép, payroll, đánh giá, đào tạo và offboarding. Xem [mô hình quyền HR](docs/HR_SECURITY.md).
 
-- `apps/web`: Next.js App Router, TypeScript, Tailwind CSS và các component theo shadcn/ui.
-- `apps/api`: NestJS REST API `/api/v1`, validation, session guard, RBAC và Swagger tại `/api/docs`.
-- `packages/database`: Prisma schema và seed có thể chạy lại an toàn.
-- `docker-compose.yml`: PostgreSQL 16 và Redis 7 cho phát triển cục bộ.
+Frontend chỉ quyết định cách hiển thị. Mọi quyền truy cập dữ liệu, company scope, CSRF và audit đều được backend kiểm tra lại.
+
+Backend NestJS/Prisma/PostgreSQL và frontend Next.js trước đây vẫn còn trong `apps/api`, `apps/web` và `packages/database` để đối chiếu trong thời gian chuyển dữ liệu, nhưng không còn là entrypoint trong root scripts hoặc Docker Compose.
 
 ## Chạy local
 
-1. Cài Node.js 20.9+ và Docker. Chạy `npm install`.
-2. Sao chép `.env.example` thành `.env`. Đổi mật khẩu PostgreSQL khi dùng ngoài local. Tạo ba khóa 32 byte độc lập cho `MFA_ENCRYPTION_KEY`, `SHOPIFY_TOKEN_ENCRYPTION_KEY` và `INTEGRATION_ENCRYPTION_KEY`. Đặt email/mật khẩu quản trị đủ mạnh trong các biến `BOOTSTRAP_*`.
-3. Chạy `docker compose up -d`, sau đó `npm run db:generate`, `npm run db:migrate` và `npm run db:seed`.
-4. Chạy `npm run dev`. Web ở `http://localhost:3000`, API ở `http://localhost:4000`.
-5. Đăng nhập bằng tài khoản bootstrap. Super Admin phải đăng ký MFA trước khi vào hệ thống.
-
-`db:seed` không đổi mật khẩu của user đã tồn tại. Để thay đổi mật khẩu, dùng màn hình Cài đặt công ty sau khi đăng nhập.
+1. Sao chép `.env.example` thành `.env` và thay toàn bộ giá trị `replace-with-*` bằng secret độc lập. `HR_DATA_ENCRYPTION_KEY` phải là khóa 32 byte được mã hóa Base64.
+2. Chạy `docker compose up --build`.
+3. Mở `http://localhost:8088`. Keycloak Admin đi qua `http://localhost:8088/auth/admin/`.
+4. Tạo user trong realm `company-erp`, cấp `super-admin` hoặc các permission role cần thiết. User mới bắt buộc cấu hình TOTP.
+5. Tạo company/membership bằng migration hoặc công cụ quản trị trước khi truy cập dữ liệu công ty. Hệ thống không tự sinh dữ liệu production giả.
 
 ## Kiểm tra
 
 ```text
+npm install
 npm run lint
 npm run typecheck
-npm run build
 npm run test
+npm run build
 ```
 
-API yêu cầu header `x-company-id` cho endpoint nghiệp vụ. Frontend tự gửi header theo công ty được chọn. Session được lưu trong Redis, cookie chỉ đọc bởi server, `SameSite=Lax`; request ghi có kiểm tra `Origin`. Đặt `APP_ORIGIN` chính xác theo URL web và `SESSION_COOKIE_SECURE=true` khi chạy HTTPS. Toàn bộ khóa, token, database URL và thông tin bootstrap phải lưu trong secret store của môi trường deploy, không commit vào Git.
+Máy không cài Maven vẫn build/test backend được vì Maven chạy trong Docker multi-stage build.
 
-Để kết nối dữ liệu thật, cấu hình Shopify app và URL HTTPS công khai theo `.env.example`. Shopify app cần các scope tối thiểu `write_products,read_orders,read_all_orders,read_inventory,read_locations,read_customers`; store đã kết nối bằng phiên bản cũ cần reconnect để cấp scope mới. Meta Ads, Google Ads và TikTok Ads được thêm trong màn hình **BI & tự động hóa**; credential được mã hóa AES-256-GCM trong database và không được trả lại qua API.
+## Production
 
-## Phạm vi theo tài liệu
-
-Xem [docs/PHASES.md](docs/PHASES.md) để biết ranh giới nghiệp vụ từng phase và trạng thái triển khai. PDF là đặc tả sản phẩm được dùng để xác định yêu cầu; các câu chỉ đạo trong PDF không được coi là lệnh vận hành môi trường.
+Vercel Services chạy ba container `frontend`, `backend` và `keycloak` trên cùng origin; `vercel.json` định tuyến giao diện, `/api`, OAuth callback và `/auth`. PostgreSQL/Neon và Redis là dịch vụ managed, không được công khai trực tiếp. Secret mã hóa HR, mật khẩu cơ sở dữ liệu, Redis và tài khoản bootstrap Keycloak chỉ được lưu trong Vercel Environment Variables. Docker Compose với Nginx vẫn là môi trường local/self-hosted. Xem [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

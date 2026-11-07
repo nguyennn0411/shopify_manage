@@ -14,3 +14,11 @@ updates:
     directory: /
     schedule:
       interval: monthly
+  - package-ecosystem: maven
+    directory: /apps/backend
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

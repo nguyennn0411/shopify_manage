@@ -1,0 +1,80 @@
+server:
+  port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        name: ERP_SESSION
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:false}
+        same-site: lax
+      timeout: 12h
+spring:
+  application:
+    name: company-erp-backend
+  datasource:
+    url: ${DATABASE_JDBC_URL:jdbc:postgresql://${PGHOST_UNPOOLED:${POSTGRES_HOST:postgres}}:${PGPORT:5432}/${PGDATABASE:${POSTGRES_DATABASE:erp}}?currentSchema=${DATABASE_SCHEMA:erp_v2}&sslmode=${DATABASE_SSL_MODE:disable}}
+    username: ${PGUSER:${POSTGRES_USER:erp}}
+    password: ${PGPASSWORD:${POSTGRES_PASSWORD:}}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      schema: ${DATABASE_SCHEMA:erp_v2}
+  data:
+    redis:
+      url: ${REDIS_URL}
+      timeout: 3s
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    default-schema: ${DATABASE_SCHEMA:erp_v2}
+    schemas: ${DATABASE_SCHEMA:erp_v2}
+    create-schemas: true
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${OIDC_CLIENT_ID:erp-backend}
+            client-secret: ${OIDC_CLIENT_SECRET:}
+            client-authentication-method: ${OIDC_CLIENT_AUTH_METHOD:none}
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope: openid,profile,email
+        provider:
+          keycloak:
+            authorization-uri: ${OIDC_PUBLIC_URL}/realms/${OIDC_REALM:company-erp}/protocol/openid-connect/auth
+            token-uri: ${OIDC_INTERNAL_URL:${KEYCLOAK_INTERNAL_URL}}/realms/${OIDC_REALM:company-erp}/protocol/openid-connect/token
+            user-info-uri: ${OIDC_INTERNAL_URL:${KEYCLOAK_INTERNAL_URL}}/realms/${OIDC_REALM:company-erp}/protocol/openid-connect/userinfo
+            jwk-set-uri: ${OIDC_INTERNAL_URL:${KEYCLOAK_INTERNAL_URL}}/realms/${OIDC_REALM:company-erp}/protocol/openid-connect/certs
+            user-name-attribute: sub
+  session:
+    store-type: redis
+    redis:
+      namespace: company-erp:session
+      flush-mode: on_save
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  observations:
+    key-values:
+      application: company-erp-backend
+app:
+  frontend-origin: ${APP_ORIGIN}
+  hr:
+    encryption-key: ${HR_DATA_ENCRYPTION_KEY}
+  rate-limit:
+    read-per-five-minutes: ${RATE_LIMIT_READ:300}
+    write-per-five-minutes: ${RATE_LIMIT_WRITE:120}
+logging:
+  pattern:
+    level: "%5p [requestId:%X{requestId:-}]"
+  level:
+    org.springframework.security: INFO

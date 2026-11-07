@@ -106,3 +106,19 @@ Tất cả migration đã được áp dụng thành công vào PostgreSQL local
 - Production: PostgreSQL/Redis managed, TLS, secret manager, backup/restore, log/metrics/alerting và quy trình rotate credential.
 
 Không thể xác nhận end-to-end với Shopify hoặc tài khoản quảng cáo thật khi chưa có credential và quyền truy cập tương ứng. Phần code, schema, API, worker và UI cho các kết nối này đã hoàn tất và không hardcode secret.
+
+## Nhóm B — Hoàn thiện Quản lý nhân sự (HRM)
+
+Bảy phân hệ HR được hoàn thiện trên nền backend modular monolith hiện có (Spring Boot, JDBC, PostgreSQL, Keycloak) và frontend React.
+
+- Hồ sơ nhân viên: tạo, cập nhật hồ sơ cơ bản, cập nhật hồ sơ riêng tư, hồ sơ đính kèm với phân loại và trạng thái quét malware.
+- Tuyển dụng: vị trí, ứng viên, chuyển giai đoạn pipeline, đặt lịch phỏng vấn, chấm điểm và khuyến nghị, thư mời nhận việc và ghi nhận phản hồi.
+- Onboarding: hồ sơ checklist, thêm hạng mục, đánh dấu hoàn thành, tiến độ tính tự động theo tỉ lệ hoàn thành.
+- Chấm công: ca làm, lịch sử theo khoảng ngày, đề xuất chỉnh sửa và quy trình phê duyệt riêng.
+- Nghỉ phép: đăng ký, số dư còn lại, phê duyệt đơn và lịch nghỉ toàn công ty theo khoảng ngày.
+- Lương & phúc lợi: cấu trúc lương mã hóa, tạo và duyệt kỳ lương, xuất phiếu lương kèm cấu phần, lịch sử điều chỉnh.
+- Đánh giá nhân viên: kỳ đánh giá, KPI/OKR, bảng đánh giá định kỳ và 360°, phản hồi, kế hoạch phát triển.
+- Đào tạo: khóa học, giao khóa, tiến độ và điểm bài kiểm tra, chứng chỉ, kỹ năng.
+- Offboarding: đơn nghỉ việc, checklist bàn giao/thu hồi tài sản/tài khoản/nghĩa vụ, hoàn tất hồ sơ và lưu trữ.
+
+Ranh giới quyền được giữ nguyên: lương, định danh và hồ sơ cá nhân dùng quyền riêng (`hr.payroll.read.all`, `hr.employee.read.sensitive`), không mặc định cho trưởng phòng. Phiếu lương chỉ được xem bởi người có quyền toàn công ty hoặc chính nhân viên đó (`hr.payroll.read.own` kèm khớp Keycloak subject).

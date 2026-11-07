@@ -1,0 +1,248 @@
+{
+  "realm": "company-erp",
+  "enabled": true,
+  "displayName": "Company ERP",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "sslRequired": "external",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA256",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "clients": [
+    {
+      "clientId": "erp-backend",
+      "name": "Company ERP BFF",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8088/login/oauth2/code/keycloak",
+        "${APP_ORIGIN}/login/oauth2/code/keycloak"
+      ],
+      "webOrigins": [
+        "http://localhost:8088",
+        "${APP_ORIGIN}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8088/login##${APP_ORIGIN}/login"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "super-admin",
+        "description": "Full ERP administration"
+      },
+      {
+        "name": "company.read"
+      },
+      {
+        "name": "company.write"
+      },
+      {
+        "name": "stores.read"
+      },
+      {
+        "name": "stores.write"
+      },
+      {
+        "name": "sales.read"
+      },
+      {
+        "name": "sales.write"
+      },
+      {
+        "name": "inventory.read"
+      },
+      {
+        "name": "inventory.write"
+      },
+      {
+        "name": "supplier.read"
+      },
+      {
+        "name": "supplier.write"
+      },
+      {
+        "name": "procurement.read"
+      },
+      {
+        "name": "procurement.write"
+      },
+      {
+        "name": "pim.read"
+      },
+      {
+        "name": "pim.write"
+      },
+      {
+        "name": "fulfillment.read"
+      },
+      {
+        "name": "fulfillment.write"
+      },
+      {
+        "name": "finance.read"
+      },
+      {
+        "name": "finance.write"
+      },
+      {
+        "name": "analytics.read"
+      },
+      {
+        "name": "audit.read"
+      },
+      {
+        "name": "hr.access"
+      },
+      {
+        "name": "hr.employee.read.basic"
+      },
+      {
+        "name": "hr.employee.read.sensitive"
+      },
+      {
+        "name": "hr.employee.write"
+      },
+      {
+        "name": "hr.recruitment.read"
+      },
+      {
+        "name": "hr.recruitment.write"
+      },
+      {
+        "name": "hr.onboarding.read"
+      },
+      {
+        "name": "hr.onboarding.write"
+      },
+      {
+        "name": "hr.attendance.read"
+      },
+      {
+        "name": "hr.attendance.write"
+      },
+      {
+        "name": "hr.attendance.approve"
+      },
+      {
+        "name": "hr.leave.read"
+      },
+      {
+        "name": "hr.leave.write"
+      },
+      {
+        "name": "hr.leave.approve"
+      },
+      {
+        "name": "hr.payroll.read.own"
+      },
+      {
+        "name": "hr.payroll.read.all"
+      },
+      {
+        "name": "hr.payroll.write"
+      },
+      {
+        "name": "hr.performance.read"
+      },
+      {
+        "name": "hr.performance.write"
+      },
+      {
+        "name": "hr.training.read"
+      },
+      {
+        "name": "hr.training.write"
+      },
+      {
+        "name": "hr.offboarding.read"
+      },
+      {
+        "name": "hr.offboarding.write"
+      },
+      {
+        "name": "platform.metrics.read"
+      },
+      {
+        "name": "pm.access"
+      },
+      {
+        "name": "pm.project.read"
+      },
+      {
+        "name": "pm.project.write"
+      },
+      {
+        "name": "pm.task.read"
+      },
+      {
+        "name": "pm.task.write"
+      },
+      {
+        "name": "pm.sprint.read"
+      },
+      {
+        "name": "pm.sprint.write"
+      },
+      {
+        "name": "pm.workflow.manage"
+      },
+      {
+        "name": "pm.timesheet.read"
+      },
+      {
+        "name": "pm.timesheet.read.own"
+      },
+      {
+        "name": "pm.timesheet.write"
+      },
+      {
+        "name": "pm.timesheet.approve"
+      },
+      {
+        "name": "pm.workload.read"
+      },
+      {
+        "name": "pm.report.read"
+      },
+      {
+        "name": "pm.issue.read"
+      },
+      {
+        "name": "pm.issue.write"
+      }
+    ]
+  },
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    }
+  ],
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'none'; object-src 'none';",
+    "contentSecurityPolicyReportOnly": "",
+    "xContentTypeOptions": "nosniff",
+    "xRobotsTag": "none",
+    "xFrameOptions": "DENY",
+    "xXSSProtection": "0",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  }
+}

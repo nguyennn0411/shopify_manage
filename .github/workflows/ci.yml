@@ -6,27 +6,33 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      DATABASE_URL: postgresql://erp:erp@localhost:5432/erp?schema=public
-      REDIS_URL: redis://localhost:6379
-      APP_ORIGIN: http://localhost:3000
-      API_INTERNAL_URL: http://localhost:4000
-      CSRF_SECRET: cdcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadcadca
-      MFA_ENCRYPTION_KEY: abababababababababababababababababababababababababababababababab
-      INTEGRATION_ENCRYPTION_KEY: bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 24, cache: npm }
       - run: npm ci
-      - run: npm run db:generate
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+      - run: npm run test:frontend
+      - run: npm run build:frontend
       - run: npm audit --omit=dev --audit-level=high
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target test -t company-erp-backend-test apps/backend
+      - run: docker build -t company-erp-backend apps/backend
+      - name: Validate compose
+        env:
+          APP_ORIGIN: http://localhost:8088
+          POSTGRES_DATABASE: erp
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          REDIS_PASSWORD: ci-redis-only-not-a-secret
+          KEYCLOAK_ADMIN_USER: ci-admin
+          KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-only-not-a-secret
+        run: docker compose config --quiet
