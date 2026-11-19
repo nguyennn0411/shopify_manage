@@ -124,9 +124,9 @@ export function ProjectsPage() {
         <select value={memberRole} onChange={event => setMemberRole(event.target.value)}><option value="OWNER">Quản lý</option><option value="LEAD">Trưởng nhóm</option><option value="MEMBER">Thành viên</option></select>
         <button className="secondary" disabled={!memberEmployeeId || addMember.isPending} onClick={() => addMember.mutate()}>Thêm thành viên</button>
         <datalist id="pm-employee-list">{employees.data?.map(employee => <option key={text(employee, 'id')} value={text(employee, 'id')}>{text(employee, 'fullName')}</option>)}</datalist></div>}
-      <div className="button-row"><input value={milestoneTitle} onChange={event => setMilestoneTitle(event.target.value)} placeholder="Mốc quan trọng" />
+      {can('pm.project.write') && <div className="button-row"><input value={milestoneTitle} onChange={event => setMilestoneTitle(event.target.value)} placeholder="Mốc quan trọng" />
         <input type="date" value={milestoneDue} onChange={event => setMilestoneDue(event.target.value)} />
-        <button className="secondary" disabled={!milestoneTitle.trim() || !milestoneDue || addMilestone.isPending} onClick={() => addMilestone.mutate()}>Thêm mốc</button></div>
+        <button className="secondary" disabled={!milestoneTitle.trim() || !milestoneDue || addMilestone.isPending} onClick={() => addMilestone.mutate()}>Thêm mốc</button></div>}
       <h2>Mốc quan trọng</h2>
       {milestones.data?.length ? <div className="button-row">{milestones.data.map(row => <span key={text(row, 'id')} className="balance-row"><span>{text(row, 'title')} · {text(row, 'due_date')} · {text(row, 'status')}</span></span>)}</div>
         : <p className="table-message">Chưa có mốc nào.</p>}

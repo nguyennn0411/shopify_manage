@@ -35,4 +35,17 @@ jobs:
           REDIS_PASSWORD: ci-redis-only-not-a-secret
           KEYCLOAK_ADMIN_USER: ci-admin
           KEYCLOAK_ADMIN_PASSWORD: ci-keycloak-only-not-a-secret
+          HR_DATA_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
         run: docker compose config --quiet
+  migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+          cache-dependency-path: apps/backend/pom.xml
+      - run: mvn -B -f apps/backend/pom.xml -Pintegration verify

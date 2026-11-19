@@ -24,25 +24,43 @@ public class PmService {
     private final JdbcClient jdbc;
     private final NamedParameterJdbcTemplate namedJdbc;
     private final AuditService audit;
+    private final PmAccess access;
 
-    public PmService(JdbcClient jdbc, NamedParameterJdbcTemplate namedJdbc, AuditService audit) {
+    public PmService(JdbcClient jdbc, NamedParameterJdbcTemplate namedJdbc, AuditService audit, PmAccess access) {
         this.jdbc = jdbc;
         this.namedJdbc = namedJdbc;
         this.audit = audit;
+        this.access = access;
     }
 
     // ===== Summary =====
 
     public PmSummary summary(UUID companyId, Authentication authentication) {
+        List<ProjectView> visibleProjects = access.canAccess(authentication, companyId, "pm.project.read")
+            ? projects(companyId, authentication) : List.of();
+        List<Map<String, Object>> visibleTasks = access.canAccess(authentication, companyId, "pm.task.read")
+            ? tasks(companyId, null, null, null, null, null, null, null, authentication) : List.of();
+        List<Map<String, Object>> visibleSprints = access.canAccess(authentication, companyId, "pm.sprint.read")
+            ? sprints(companyId, null, authentication) : List.of();
+        List<Map<String, Object>> visibleIssues = access.canAccess(authentication, companyId, "pm.issue.read")
+            ? issues(companyId, null, null, null, null, authentication) : List.of();
+        LocalDate today = LocalDate.now();
         return new PmSummary(
-            allowed(authentication, "pm.project.read") ? count("pm_projects", "status in ('PLANNED','ACTIVE','ON_HOLD')", companyId) : null,
-            allowed(authentication, "pm.task.read") ? count("pm_tasks", "1=1", companyId) : null,
-            allowed(authentication, "pm.task.read") ? count("pm_tasks",
-                "due_date is not null and due_date between current_date and current_date + interval '7 days'", companyId) : null,
-            allowed(authentication, "pm.sprint.read") ? count("pm_sprints", "status='ACTIVE'", companyId) : null,
-            allowed(authentication, "pm.timesheet.read") ? count("pm_timesheets", "status='SUBMITTED'", companyId) : null,
-            allowed(authentication, "pm.issue.read") ? count("pm_issues", "status in ('OPEN','IN_PROGRESS','REOPENED')", companyId) : null,
-            allowed(authentication, "pm.issue.read") ? count("pm_issues", "status in ('OPEN','IN_PROGRESS','REOPENED') and severity='CRITICAL'", companyId) : null);
+            access.canAccess(authentication, companyId, "pm.project.read") ? visibleProjects.stream()
+                .filter(item -> List.of("PLANNED", "ACTIVE", "ON_HOLD").contains(item.status())).count() : null,
+            access.canAccess(authentication, companyId, "pm.task.read") ? (long) visibleTasks.size() : null,
+            access.canAccess(authentication, companyId, "pm.task.read") ? visibleTasks.stream()
+                .map(item -> localDateValue(item.get("due_date"))).filter(java.util.Objects::nonNull)
+                .filter(date -> !date.isBefore(today) && !date.isAfter(today.plusDays(7))).count() : null,
+            access.canAccess(authentication, companyId, "pm.sprint.read") ? visibleSprints.stream()
+                .filter(item -> "ACTIVE".equals(String.valueOf(item.get("status")))).count() : null,
+            access.canViewTimesheets(authentication, companyId, null, null, null)
+                ? count("pm_timesheets", "status='SUBMITTED'", companyId) : null,
+            access.canAccess(authentication, companyId, "pm.issue.read") ? visibleIssues.stream()
+                .filter(item -> List.of("OPEN", "IN_PROGRESS", "REOPENED").contains(String.valueOf(item.get("status")))).count() : null,
+            access.canAccess(authentication, companyId, "pm.issue.read") ? visibleIssues.stream()
+                .filter(item -> List.of("OPEN", "IN_PROGRESS", "REOPENED").contains(String.valueOf(item.get("status"))))
+                .filter(item -> "CRITICAL".equals(String.valueOf(item.get("severity")))).count() : null);
     }
 
     // ===== Project Management =====
@@ -56,10 +74,16 @@ public class PmService {
                    (select coalesce(sum(ts.hours*m.cost_rate),0) from pm_timesheets ts
                       join pm_tasks t on t.id=ts.task_id
                       join pm_project_members m on m.project_id=t.project_id and m.employee_id=ts.employee_id
-                     where ts.company_id=p.company_id and ts.status='APPROVED') actual_cost
+                     where ts.company_id=p.company_id and ts.status='APPROVED' and t.project_id=p.id) actual_cost
             from pm_projects p left join departments d on d.id=p.department_id
             where p.company_id=:companyId order by p.code
             """).param("companyId", companyId.toString()).query(this::projectView).list();
+    }
+
+    public List<ProjectView> projects(UUID companyId, Authentication authentication) {
+        return projects(companyId).stream()
+            .filter(project -> access.canAccessProject(authentication, companyId, project.id(), "pm.project.read"))
+            .toList();
     }
 
     public ProjectView project(UUID companyId, UUID projectId) {
@@ -71,7 +95,7 @@ public class PmService {
                    (select coalesce(sum(ts.hours*m.cost_rate),0) from pm_timesheets ts
                       join pm_tasks t on t.id=ts.task_id
                       join pm_project_members m on m.project_id=t.project_id and m.employee_id=ts.employee_id
-                     where ts.company_id=p.company_id and ts.status='APPROVED') actual_cost
+                     where ts.company_id=p.company_id and ts.status='APPROVED' and t.project_id=p.id) actual_cost
             from pm_projects p left join departments d on d.id=p.department_id
             where p.company_id=:companyId and p.id=:projectId
             """).param("companyId", companyId.toString()).param("projectId", projectId.toString())
@@ -81,6 +105,10 @@ public class PmService {
 
     @Transactional
     public CreatedResource createProject(UUID companyId, ProjectCreateRequest request, String actor) {
+        if (request.departmentId() != null) ensureCompanyResource("departments", companyId, request.departmentId(), "Department");
+        if (request.ownerEmployeeId() != null) ensureCompanyResource("employees", companyId, request.ownerEmployeeId(), "Owner");
+        if (request.startsOn() != null && request.endsOn() != null && request.endsOn().isBefore(request.startsOn()))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Project end date must be on or after start date");
         UUID id = UUID.randomUUID();
         String code = request.code() == null || request.code().isBlank()
             ? nextCode("pm_projects", "PROJ", companyId) : request.code().trim();
@@ -103,6 +131,8 @@ public class PmService {
     @Transactional
     public ProjectView updateProject(UUID companyId, UUID projectId, ProjectUpdateRequest request, String actor) {
         ensureCompanyResource("pm_projects", companyId, projectId, "Project");
+        if (request.departmentId() != null) ensureCompanyResource("departments", companyId, request.departmentId(), "Department");
+        if (request.ownerEmployeeId() != null) ensureCompanyResource("employees", companyId, request.ownerEmployeeId(), "Owner");
         jdbc.sql("""
             update pm_projects set name=coalesce(:name,name),
               department_id=coalesce(:departmentId,department_id),
@@ -145,6 +175,19 @@ public class PmService {
             """).param("projectId", request.projectId().toString()).param("companyId", companyId.toString())
             .param("employeeId", request.employeeId().toString()).param("role", role)
             .param("costRate", request.costRate()).update();
+        String subject = jdbc.sql("select keycloak_subject from employees where company_id=:companyId and id=:employeeId")
+            .param("companyId", companyId.toString()).param("employeeId", request.employeeId().toString())
+            .query(String.class).optional().orElse(null);
+        if (subject != null) {
+            jdbc.sql("""
+                insert into company_membership_scopes(company_id,keycloak_subject,scope_type,scope_id)
+                select :companyId,:subject,'PROJECT',:projectId
+                where exists (select 1 from company_memberships where company_id=:companyId
+                  and keycloak_subject=:subject and status='ACTIVE')
+                on conflict do nothing
+                """).param("companyId", companyId.toString()).param("subject", subject)
+                .param("projectId", request.projectId().toString()).update();
+        }
         audit.write(companyId, actor, "PM_PROJECT_MEMBER_ADDED", "PM_PROJECT", request.projectId().toString(),
             "{\"employeeId\":\"" + request.employeeId() + "\"}");
         return new CreatedResource(request.projectId(), role);
@@ -182,7 +225,7 @@ public class PmService {
 
     public List<Map<String, Object>> projectMembers(UUID companyId, UUID projectId) {
         return rows("""
-            select m.id,m.employee_id,e.full_name,e.employee_code,m.role,m.cost_rate,m.created_at
+            select m.project_id,m.employee_id,e.full_name,e.employee_code,m.role,m.cost_rate,m.created_at
             from pm_project_members m join employees e on e.id=m.employee_id
             where m.company_id=:companyId and m.project_id=:projectId
             order by e.full_name
@@ -216,6 +259,12 @@ public class PmService {
                    (select count(*) from pm_tasks t where t.sprint_id=s.id and t.company_id=s.company_id) task_count
             from pm_sprints s join pm_projects p on p.id=s.project_id
             where s.company_id=:companyId""" + filter + " order by s.starts_on desc", companyId, params);
+    }
+
+    public List<Map<String, Object>> sprints(UUID companyId, UUID projectId, Authentication authentication) {
+        return sprints(companyId, projectId).stream()
+            .filter(item -> access.canAccessProject(authentication, companyId, uuidValue(item.get("project_id")), "pm.sprint.read"))
+            .toList();
     }
 
     @Transactional
@@ -303,6 +352,13 @@ public class PmService {
             + " order by t.due_date is null, t.due_date, t.code", companyId, params);
     }
 
+    public List<Map<String, Object>> tasks(UUID companyId, UUID projectId, UUID sprintId, UUID statusId,
+            UUID assigneeId, String priority, LocalDate from, LocalDate to, Authentication authentication) {
+        return tasks(companyId, projectId, sprintId, statusId, assigneeId, priority, from, to).stream()
+            .filter(item -> access.canAccessTask(authentication, companyId, uuidValue(item.get("id")), "pm.task.read"))
+            .toList();
+    }
+
     public Map<String, Object> task(UUID companyId, UUID taskId) {
         List<Map<String, Object>> result = rows("""
             select t.id,t.code,t.title,t.description,t.project_id,p.code project_code,p.name project_name,
@@ -331,6 +387,11 @@ public class PmService {
         if (request.assigneeEmployeeId() != null) ensureCompanyResource("employees", companyId, request.assigneeEmployeeId(), "Employee");
         if (request.supervisorEmployeeId() != null) ensureCompanyResource("employees", companyId, request.supervisorEmployeeId(), "Employee");
         if (request.parentTaskId() != null) ensureCompanyResource("pm_tasks", companyId, request.parentTaskId(), "Parent task");
+        if (request.sprintId() != null) ensureSprintProject(companyId, request.sprintId(), request.projectId());
+        if (request.parentTaskId() != null && request.projectId() != null)
+            ensureTaskProject(companyId, request.parentTaskId(), request.projectId(), "Parent task");
+        if (request.startsOn() != null && request.dueDate() != null && request.dueDate().isBefore(request.startsOn()))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Task due date must be on or after start date");
         UUID statusId = request.statusId() != null ? request.statusId() : defaultStatusId(companyId);
         ensureCompanyResource("pm_workflow_statuses", companyId, statusId, "Workflow status");
         UUID id = UUID.randomUUID();
@@ -373,6 +434,12 @@ public class PmService {
         if (request.departmentId() != null) ensureCompanyResource("departments", companyId, request.departmentId(), "Department");
         if (request.assigneeEmployeeId() != null) ensureCompanyResource("employees", companyId, request.assigneeEmployeeId(), "Employee");
         if (request.supervisorEmployeeId() != null) ensureCompanyResource("employees", companyId, request.supervisorEmployeeId(), "Employee");
+        if (request.sprintId() != null) {
+            UUID projectId = request.projectId() != null ? request.projectId() : taskProject(companyId, taskId);
+            ensureSprintProject(companyId, request.sprintId(), projectId);
+        }
+        if (request.startsOn() != null && request.dueDate() != null && request.dueDate().isBefore(request.startsOn()))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Task due date must be on or after start date");
         jdbc.sql("""
             update pm_tasks set title=coalesce(:title,title), description=coalesce(:description,description),
               project_id=coalesce(:projectId,project_id), sprint_id=coalesce(:sprintId,sprint_id),
@@ -399,7 +466,10 @@ public class PmService {
     public CreatedResource moveTask(UUID companyId, UUID taskId, UUID statusId, UUID sprintId, String actor) {
         ensureCompanyResource("pm_tasks", companyId, taskId, "Task");
         ensureCompanyResource("pm_workflow_statuses", companyId, statusId, "Workflow status");
-        if (sprintId != null) ensureCompanyResource("pm_sprints", companyId, sprintId, "Sprint");
+        if (sprintId != null) {
+            ensureCompanyResource("pm_sprints", companyId, sprintId, "Sprint");
+            ensureSprintProject(companyId, sprintId, taskProject(companyId, taskId));
+        }
         boolean isDone = jdbc.sql("select is_done from pm_workflow_statuses where id=:id and company_id=:companyId")
             .param("id", statusId.toString()).param("companyId", companyId.toString())
             .query(Boolean.class).optional().orElse(false);
@@ -491,6 +561,10 @@ public class PmService {
         ensureCompanyResource("pm_tasks", companyId, request.dependsOnTaskId(), "Dependency task");
         if (request.taskId().equals(request.dependsOnTaskId()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A task cannot depend on itself");
+        UUID taskProject = taskProject(companyId, request.taskId());
+        UUID dependencyProject = taskProject(companyId, request.dependsOnTaskId());
+        if (!java.util.Objects.equals(taskProject, dependencyProject))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Task dependencies must belong to the same project");
         if (dependsOn(companyId, request.taskId(), request.dependsOnTaskId()))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Dependency would create a cycle");
         jdbc.sql("""
@@ -522,7 +596,7 @@ public class PmService {
 
     public List<Map<String, Object>> taskDependencies(UUID companyId, UUID taskId) {
         return rows("""
-            select d.id,d.depends_on_task_id,t.code,t.title,t.due_date,d.dependency_type
+            select d.task_id,d.depends_on_task_id,t.code,t.title,t.due_date,d.dependency_type
             from pm_task_dependencies d join pm_tasks t on t.id=d.depends_on_task_id
             where d.company_id=:companyId and d.task_id=:taskId
             """, companyId, Map.of("taskId", taskId.toString()));
@@ -572,6 +646,8 @@ public class PmService {
         ensureCompanyResource("employees", companyId, employeeId, "Employee");
         if (request.taskId() != null) ensureCompanyResource("pm_tasks", companyId, request.taskId(), "Task");
         if (request.projectId() != null) ensureCompanyResource("pm_projects", companyId, request.projectId(), "Project");
+        if (request.taskId() != null && request.projectId() != null)
+            ensureTaskProject(companyId, request.taskId(), request.projectId(), "Task");
         if (request.taskId() == null && request.projectId() == null)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A timesheet entry must reference a task or a project");
         StringBuilder duplicateSql = new StringBuilder("""
@@ -721,8 +797,10 @@ public class PmService {
                    coalesce(sum(ts.hours*m.cost_rate),0) total_cost,
                    coalesce(sum(ts.hours*m.cost_rate)/nullif(count(distinct ts.employee_id),0),0) avg_cost_per_member
             from pm_timesheets ts
-            join pm_project_members m on m.project_id=:projectId and m.employee_id=ts.employee_id
+            join pm_project_members m on m.company_id=ts.company_id and m.project_id=:projectId and m.employee_id=ts.employee_id
             where ts.company_id=:companyId and ts.status='APPROVED'
+              and (ts.project_id=:projectId or ts.task_id in
+                (select t.id from pm_tasks t where t.company_id=:companyId and t.project_id=:projectId))
             """, companyId, Map.of("projectId", projectId.toString())));
         result.put("staleTasks", rows("""
             select t.id,t.code,t.title,t.due_date,e.full_name assignee_name
@@ -739,7 +817,9 @@ public class PmService {
                    (select count(*) from pm_tasks t where t.company_id=m.company_id and t.project_id=m.project_id
                       and t.assignee_employee_id=m.employee_id and t.status_id in (select id from pm_workflow_statuses where is_done=true)) done_tasks,
                    (select coalesce(sum(ts.hours),0) from pm_timesheets ts where ts.company_id=m.company_id
-                      and ts.employee_id=m.employee_id and ts.status='APPROVED') approved_hours
+                      and ts.employee_id=m.employee_id and ts.status='APPROVED'
+                      and (ts.project_id=m.project_id or ts.task_id in
+                        (select pt.id from pm_tasks pt where pt.company_id=m.company_id and pt.project_id=m.project_id))) approved_hours
             from pm_project_members m join employees e on e.id=m.employee_id
             where m.company_id=:companyId and m.project_id=:projectId order by e.full_name
             """, companyId, Map.of("projectId", projectId.toString())));
@@ -771,11 +851,20 @@ public class PmService {
             companyId, params);
     }
 
+    public List<Map<String, Object>> issues(UUID companyId, UUID projectId, String type, String severity, String status,
+            Authentication authentication) {
+        return issues(companyId, projectId, type, severity, status).stream()
+            .filter(item -> access.canAccessIssue(authentication, companyId, uuidValue(item.get("id")), "pm.issue.read"))
+            .toList();
+    }
+
     @Transactional
     public CreatedResource createIssue(UUID companyId, IssueCreateRequest request, String actor) {
         if (request.projectId() != null) ensureCompanyResource("pm_projects", companyId, request.projectId(), "Project");
         if (request.taskId() != null) ensureCompanyResource("pm_tasks", companyId, request.taskId(), "Task");
         if (request.assigneeEmployeeId() != null) ensureCompanyResource("employees", companyId, request.assigneeEmployeeId(), "Employee");
+        if (request.taskId() != null && request.projectId() != null)
+            ensureTaskProject(companyId, request.taskId(), request.projectId(), "Task");
         UUID id = UUID.randomUUID();
         String code = request.code() == null || request.code().isBlank()
             ? nextCode("pm_issues", "ISS", companyId) : request.code().trim();
@@ -826,6 +915,28 @@ public class PmService {
     }
 
     // ===== Internals =====
+
+    private void ensureSprintProject(UUID companyId, UUID sprintId, UUID projectId) {
+        if (projectId == null)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A sprint task must reference its project");
+        long found = jdbc.sql("select count(*) from pm_sprints where company_id=:companyId and id=:sprintId and project_id=:projectId")
+            .param("companyId", companyId.toString()).param("sprintId", sprintId.toString())
+            .param("projectId", projectId.toString()).query(Long.class).single();
+        if (found == 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Sprint does not belong to project");
+    }
+
+    private void ensureTaskProject(UUID companyId, UUID taskId, UUID projectId, String label) {
+        long found = jdbc.sql("select count(*) from pm_tasks where company_id=:companyId and id=:taskId and project_id=:projectId")
+            .param("companyId", companyId.toString()).param("taskId", taskId.toString())
+            .param("projectId", projectId.toString()).query(Long.class).single();
+        if (found == 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, label + " does not belong to project");
+    }
+
+    private UUID taskProject(UUID companyId, UUID taskId) {
+        return jdbc.sql("select project_id from pm_tasks where company_id=:companyId and id=:taskId")
+            .param("companyId", companyId.toString()).param("taskId", taskId.toString())
+            .query(String.class).optional().map(UUID::fromString).orElse(null);
+    }
 
     private void refreshProjectProgress(UUID companyId, UUID taskId) {
         String projectId = jdbc.sql("select project_id from pm_tasks where id=:id and company_id=:companyId")
@@ -945,6 +1056,15 @@ public class PmService {
 
     private static String blankToNull(String value) { return value == null || value.isBlank() ? null : value.trim(); }
     private static String uuid(UUID value) { return value == null ? null : value.toString(); }
+    private static UUID uuidValue(Object value) {
+        if (value == null) return null;
+        return value instanceof UUID id ? id : UUID.fromString(value.toString().trim());
+    }
+    private static LocalDate localDateValue(Object value) {
+        if (value instanceof LocalDate date) return date;
+        if (value instanceof java.sql.Date date) return date.toLocalDate();
+        return null;
+    }
 
     private static String jsonArray(List<String> values) {
         if (values == null || values.isEmpty()) return null;

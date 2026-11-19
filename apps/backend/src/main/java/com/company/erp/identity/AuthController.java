@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.csrf.CsrfToken;
@@ -27,8 +26,7 @@ public class AuthController {
     MeResponse me(Authentication authentication, HttpSession session) {
         OidcUser user = (OidcUser) authentication.getPrincipal();
         identities.provision(user);
-        Set<String> permissions = new TreeSet<>();
-        authentication.getAuthorities().forEach(authority -> permissions.add(authority.getAuthority()));
+        Set<String> permissions = identities.effectivePermissions(authentication);
         Instant expiresAt = Instant.ofEpochMilli(session.getLastAccessedTime()).plusSeconds(session.getMaxInactiveInterval());
         return new MeResponse(user.getSubject(), user.getEmail(), user.getFullName(), permissions, identities.companies(authentication), expiresAt);
     }

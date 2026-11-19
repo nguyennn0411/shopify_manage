@@ -5,7 +5,7 @@ HR là một domain trong backend modular monolith nhưng có ranh giới quyề
 | Dữ liệu / thao tác | Quyền đọc | Quyền ghi / duyệt |
 |---|---|---|
 | Hồ sơ công việc cơ bản | `hr.employee.read.basic` | `hr.employee.write` |
-| Định danh, liên hệ cá nhân, liên hệ khẩn cấp, hồ sơ riêng | `hr.employee.read.sensitive` | `hr.employee.write` |
+| Định danh, liên hệ cá nhân, liên hệ khẩn cấp, hồ sơ riêng | `hr.employee.read.sensitive` | `hr.employee.write.sensitive` |
 | Tuyển dụng | `hr.recruitment.read` | `hr.recruitment.write` |
 | Onboarding | `hr.onboarding.read` | `hr.onboarding.write` |
 | Chấm công | `hr.attendance.read` | `hr.attendance.write`, `hr.attendance.approve` |
@@ -24,6 +24,7 @@ HR là một domain trong backend modular monolith nhưng có ranh giới quyề
 - Mỗi lần mã hóa dùng IV ngẫu nhiên; database không lưu plaintext.
 - Danh sách nhân viên cơ bản không join bảng private và không trả các trường nhạy cảm.
 - API private profile yêu cầu riêng `hr.employee.read.sensitive`.
+- API cập nhật private profile và metadata hồ sơ đính kèm yêu cầu riêng `hr.employee.write.sensitive`.
 - API payslip chỉ cho `hr.payroll.read.all`, hoặc `hr.payroll.read.own` khi Keycloak subject khớp chính xác với hồ sơ nhân viên.
 - File đính kèm chỉ lưu object key và classification trong PostgreSQL; file production phải nằm trong private object storage, dùng signed URL ngắn hạn và được quét malware trước khi tải xuống.
 
@@ -39,9 +40,9 @@ Ngoài ranh giới quyền ở trên, các endpoint sau đòi hỏi quyền riê
 |---|---|---|
 | `GET /api/v1/hr/employees` | `hr.employee.read.basic` | Danh sách cơ bản, không join bảng private, không có lương. |
 | `GET /api/v1/hr/employees/{id}/private` | `hr.employee.read.sensitive` | Định danh, liên hệ cá nhân, liên hệ khẩn cấp; trả về đã giải mã. |
-| `PATCH /api/v1/hr/employees/{id}/private` | `hr.employee.write` | Ghi đè vào `employee_private_profiles`, mọi giá trị được mã hóa AES-256-GCM. |
+| `PATCH /api/v1/hr/employees/{id}/private` | `hr.employee.write.sensitive` | Ghi đè vào `employee_private_profiles`, mọi giá trị được mã hóa AES-256-GCM. |
 | `GET /api/v1/hr/employees/{id}/documents` | `hr.employee.read.sensitive` | Hồ sơ đính kèm chỉ trả metadata và object key, không trả nội dung file. |
-| `POST /api/v1/hr/employees/documents` | `hr.employee.write` | Ghi object key + classification; file thật nằm ở private object storage. |
+| `POST /api/v1/hr/employees/documents` | `hr.employee.write.sensitive` | Ghi object key + classification; file thật nằm ở private object storage. |
 | `GET /api/v1/hr/payroll/runs` | `hr.payroll.read.all` | Bảng lương toàn công ty. |
 | `GET /api/v1/hr/payroll/salary-structures/{employeeId}` | `hr.payroll.read.all` | Cấu trúc lương đã giải mã. |
 | `GET /api/v1/hr/payroll/runs/{id}/history` | `hr.payroll.read.all` | Lịch sử điều chỉnh lương từ audit log. |
@@ -53,3 +54,5 @@ Ngoài ranh giới quyền ở trên, các endpoint sau đòi hỏi quyền riê
 Vai trò `hr.access` chỉ mở khu vực HR và cho phép tra cứu hồ sơ nhân viên gắn với chính Keycloak subject (`/hr/employees/me`). Nó không cấp quyền đọc bất kỳ danh sách nghiệp vụ nào.
 
 Mọi thao tác ghi trong phân hệ HR đều ghi `audit_logs` với actor, hành động và loại tài nguyên để tra cứu về sau.
+
+Vai trò hệ thống `HR_MANAGER` có quyền vận hành vòng đời nhân viên và dữ liệu riêng tư nhưng không mặc định có quyền payroll. `PAYROLL_MANAGER` có quyền vận hành payroll nhưng không mặc định được đọc hồ sơ định danh riêng tư.

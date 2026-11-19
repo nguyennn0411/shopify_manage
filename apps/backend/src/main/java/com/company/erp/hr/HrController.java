@@ -37,7 +37,9 @@ public class HrController {
 
     @GetMapping("/employees")
     @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.read.basic')")
-    List<EmployeeView> employees(@RequestParam UUID companyId) { return hr.employees(companyId); }
+    List<EmployeeView> employees(@RequestParam UUID companyId, Authentication authentication) {
+        return hr.employees(companyId, authentication);
+    }
 
     @GetMapping("/employees/me")
     @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.access')")
@@ -47,7 +49,8 @@ public class HrController {
 
     @PostMapping("/employees")
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write')")
+    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write') and " +
+        "(#request.privateProfile() == null or @companyAccess.canAccess(authentication,#companyId,'hr.employee.write.sensitive'))")
     EmployeeView createEmployee(@RequestParam UUID companyId, @Valid @RequestBody EmployeeCreateRequest request,
             Authentication authentication) {
         return hr.createEmployee(companyId, request, authentication.getName());
@@ -61,7 +64,7 @@ public class HrController {
     }
 
     @PatchMapping("/employees/{employeeId}/private")
-    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write')")
+    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write.sensitive')")
     PrivateProfileView updatePrivateProfile(@RequestParam UUID companyId, @PathVariable UUID employeeId,
             @Valid @RequestBody PrivateProfileUpdateRequest request, Authentication authentication) {
         return hr.updatePrivateProfile(companyId, employeeId, request, authentication.getName());
@@ -417,7 +420,7 @@ public class HrController {
 
     @PostMapping("/employees/documents")
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write')")
+    @PreAuthorize("@companyAccess.canAccess(authentication,#companyId,'hr.employee.write.sensitive')")
     CreatedResource addEmployeeDocument(@RequestParam UUID companyId, @Valid @RequestBody EmployeeDocumentRequest request,
             Authentication authentication) { return hr.addEmployeeDocument(companyId, request, authentication.getName()); }
 

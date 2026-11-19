@@ -4,7 +4,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.oidcLogin;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.company.erp.audit.AuditService;
@@ -42,7 +44,7 @@ class HrSecurityTest {
         ValueOperations<String, String> values = org.mockito.Mockito.mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
         when(values.increment(any(String.class))).thenReturn(1L);
-        when(hrService.employees(COMPANY_ID)).thenReturn(List.of());
+        when(hrService.employees(eq(COMPANY_ID), any())).thenReturn(List.of());
         when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("hr.employee.read.basic"))).thenReturn(true);
         when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("hr.employee.read.sensitive"))).thenReturn(false);
     }
@@ -52,6 +54,23 @@ class HrSecurityTest {
         mvc.perform(get("/api/v1/hr/employees").param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
             .andExpect(status().isOk());
         mvc.perform(get("/api/v1/hr/employees/{id}/private", EMPLOYEE_ID).param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void basicEmployeeWriteDoesNotGrantSensitiveProfileWrite() throws Exception {
+        when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("hr.employee.write"))).thenReturn(true);
+        when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("hr.employee.write.sensitive"))).thenReturn(false);
+
+        mvc.perform(patch("/api/v1/hr/employees/{id}", EMPLOYEE_ID)
+                .param("companyId", COMPANY_ID.toString()).with(oidcLogin()).with(csrf())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"fullName\":\"Nguyen Van A\"}"))
+            .andExpect(status().isOk());
+        mvc.perform(patch("/api/v1/hr/employees/{id}/private", EMPLOYEE_ID)
+                .param("companyId", COMPANY_ID.toString()).with(oidcLogin()).with(csrf())
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"identityNumber\":\"0123456789\"}"))
             .andExpect(status().isForbidden());
     }
 }

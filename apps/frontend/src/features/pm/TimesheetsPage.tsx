@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useOutletContext } from 'react-router-dom';
 import { z } from 'zod';
-import type { Company } from '../../core/domain/types';
+import type { Company, Employee } from '../../core/domain/types';
 import { api } from '../../core/http/apiClient';
 import { useAuth } from '../auth/AuthProvider';
 import { usePmEmployees, usePmProjects, usePmTasks, type PmRow } from './usePmQueries';
@@ -34,11 +34,16 @@ export function TimesheetsPage() {
   const [range, setRange] = useState({ from: '', to: '' });
 
   const employees = usePmEmployees(companyId);
+  const ownEmployee = useQuery({ queryKey: ['hr-own-employee', companyId],
+    enabled: !!companyId && !can('pm.timesheet.read') && can('pm.timesheet.read.own'),
+    queryFn: async () => (await api.get<Employee>('/hr/employees/me', { params: { companyId } })).data });
   const projects = usePmProjects(companyId);
   const tasks = usePmTasks(companyId, { projectId: '', sprintId: '', statusId: '', assigneeId: '', priority: '', from: '', to: '' });
-  const entries = useQuery({ queryKey: ['pm-timesheets', companyId, range], enabled: !!companyId,
+  const employeeFilter = can('pm.timesheet.read') ? undefined : ownEmployee.data?.id;
+  const entries = useQuery({ queryKey: ['pm-timesheets', companyId, range, employeeFilter],
+    enabled: !!companyId && (can('pm.timesheet.read') || !!employeeFilter),
     queryFn: async () => (await api.get<PmRow[]>('/pm/timesheets', {
-      params: { companyId, from: range.from || undefined, to: range.to || undefined } })).data });
+      params: { companyId, employeeId: employeeFilter, from: range.from || undefined, to: range.to || undefined } })).data });
 
   const create = useMutation({ mutationFn: async (values: TimesheetForm) =>
       (await api.post<Created>('/pm/timesheets', {
@@ -76,7 +81,7 @@ export function TimesheetsPage() {
     {can('pm.timesheet.write') && <section className="panel"><div className="quick-action-title"><Plus />
       <div><strong>Ghi thời gian</strong><p>Công việc hoặc dự án, số giờ và ghi chú.</p></div></div>
       <form className="form-grid compact-form" onSubmit={form.handleSubmit(values => create.mutate(values))}>
-        <label>Nhân viên<select {...form.register('employeeId')}><option value="">Chính tôi</option>{employees.data?.map(row => <option key={text(row, 'id')} value={text(row, 'id')}>{text(row, 'fullName')}</option>)}</select></label>
+        <label>Nhân viên<select {...form.register('employeeId')}><option value="">Chính tôi</option>{can('pm.timesheet.read') && employees.data?.map(row => <option key={text(row, 'id')} value={text(row, 'id')}>{text(row, 'fullName')}</option>)}</select></label>
         <label>Công việc<select {...form.register('taskId')}><option value="">Không</option>{tasks.data?.map(row => <option key={text(row, 'id')} value={text(row, 'id')}>{text(row, 'code')} · {text(row, 'title')}</option>)}</select></label>
         <label>Dự án<select {...form.register('projectId')}><option value="">Không</option>{projects.data?.map(row => <option key={text(row, 'id')} value={text(row, 'id')}>{text(row, 'code')} · {text(row, 'name')}</option>)}</select></label>
         <label>Ngày làm việc<input type="date" {...form.register('workDate')} /></label>

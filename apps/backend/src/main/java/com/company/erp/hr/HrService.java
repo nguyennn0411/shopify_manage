@@ -41,7 +41,7 @@ public class HrService {
 
     public HrSummary summary(UUID companyId, Authentication authentication) {
         return new HrSummary(
-            allowed(authentication, "hr.employee.read.basic") ? count("employees", "employment_status='ACTIVE'", companyId) : null,
+            allowed(authentication, "hr.employee.read.basic") ? count("employees", "employment_status in ('ACTIVE','PROBATION')", companyId) : null,
             allowed(authentication, "hr.recruitment.read") ? count("recruitment_positions", "status='OPEN'", companyId) : null,
             allowed(authentication, "hr.recruitment.read") ? count("recruitment_candidates", "status='ACTIVE'", companyId) : null,
             allowed(authentication, "hr.onboarding.read") ? count("onboarding_cases", "status not in ('COMPLETED','CANCELLED')", companyId) : null,
@@ -53,20 +53,43 @@ public class HrService {
             allowed(authentication, "hr.offboarding.read") ? count("offboarding_cases", "status not in ('COMPLETED','CANCELLED')", companyId) : null);
     }
 
-    public List<EmployeeView> employees(UUID companyId) {
+    public List<EmployeeView> employees(UUID companyId, Authentication authentication) {
+        boolean identityPermission = authentication.getAuthorities().stream()
+            .anyMatch(authority -> authority.getAuthority().equals("hr.employee.read.basic"));
         return jdbc.sql("""
-            select e.id,e.employee_code,e.full_name,e.work_email,e.department_id,d.name department_name,
+            select e.id,e.employee_code,e.full_name,e.work_email,e.branch_id,b.name branch_name,
+                   e.department_id,d.name department_name,e.position_id,p.title position_title,
                    e.job_title,e.manager_employee_id,e.join_date,e.employment_status
-            from employees e left join departments d on d.id=e.department_id
-            where e.company_id=:companyId order by e.employee_code
-            """).param("companyId", companyId.toString()).query(this::employeeView).list();
+            from employees e left join company_branches b on b.id=e.branch_id
+              left join departments d on d.id=e.department_id
+              left join job_positions p on p.id=e.position_id
+            where e.company_id=:companyId and (
+              :identityPermission=true or exists (
+                select 1 from company_membership_scopes s
+                where s.company_id=e.company_id and s.keycloak_subject=:subject and (
+                  (s.scope_type='COMPANY' and s.scope_id=e.company_id)
+                  or (s.scope_type='SELF' and s.scope_id=e.id)
+                  or (s.scope_type='TEAM' and (s.scope_id=e.id or s.scope_id=e.manager_employee_id))
+                  or (s.scope_type='DEPARTMENT' and s.scope_id=e.department_id)
+                  or (s.scope_type='BRANCH' and (s.scope_id=e.branch_id or s.scope_id=d.branch_id))
+                  or (s.scope_type='PROJECT' and exists (
+                    select 1 from pm_project_members pm where pm.company_id=e.company_id
+                      and pm.employee_id=e.id and pm.project_id=s.scope_id))
+                )
+              )
+            ) order by e.employee_code
+            """).param("companyId", companyId.toString()).param("identityPermission", identityPermission)
+            .param("subject", authentication.getName()).query(this::employeeView).list();
     }
 
     public EmployeeView ownEmployee(UUID companyId, String keycloakSubject) {
         return jdbc.sql("""
-            select e.id,e.employee_code,e.full_name,e.work_email,e.department_id,d.name department_name,
+            select e.id,e.employee_code,e.full_name,e.work_email,e.branch_id,b.name branch_name,
+                   e.department_id,d.name department_name,e.position_id,p.title position_title,
                    e.job_title,e.manager_employee_id,e.join_date,e.employment_status
-            from employees e left join departments d on d.id=e.department_id
+            from employees e left join company_branches b on b.id=e.branch_id
+              left join departments d on d.id=e.department_id
+              left join job_positions p on p.id=e.position_id
             where e.company_id=:companyId and e.keycloak_subject=:subject
             """).param("companyId", companyId.toString()).param("subject", keycloakSubject)
             .query(this::employeeView).optional().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Employee identity is not linked"));
@@ -74,15 +97,21 @@ public class HrService {
 
     @Transactional
     public EmployeeView createEmployee(UUID companyId, EmployeeCreateRequest request, String actorSubject) {
+        ensureEmployeeOrganization(companyId, request.branchId(), request.departmentId(), request.positionId());
+        if (request.managerEmployeeId() != null) {
+            ensureCompanyResource("employees", companyId, request.managerEmployeeId(), "Manager");
+        }
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-            insert into employees(id,company_id,employee_code,keycloak_subject,full_name,work_email,department_id,
-              job_title,manager_employee_id,join_date,employment_status)
-            values(:id,:companyId,:code,:subject,:name,:email,:departmentId,:title,:managerId,:joinDate,'ACTIVE')
+            insert into employees(id,company_id,employee_code,keycloak_subject,full_name,work_email,branch_id,
+              department_id,position_id,job_title,manager_employee_id,join_date,employment_status)
+            values(:id,:companyId,:code,:subject,:name,:email,:branchId,:departmentId,:positionId,
+              :title,:managerId,:joinDate,'ACTIVE')
             """).param("id", id.toString()).param("companyId", companyId.toString())
             .param("code", request.employeeCode()).param("subject", blankToNull(request.keycloakSubject()))
             .param("name", request.fullName()).param("email", blankToNull(request.workEmail()))
-            .param("departmentId", uuid(request.departmentId())).param("title", request.jobTitle())
+            .param("branchId", uuid(request.branchId())).param("departmentId", uuid(request.departmentId()))
+            .param("positionId", uuid(request.positionId())).param("title", request.jobTitle())
             .param("managerId", uuid(request.managerEmployeeId())).param("joinDate", request.joinDate()).update();
         if (request.privateProfile() != null) savePrivate(companyId, id, request.privateProfile());
         audit.write(companyId, actorSubject, "HR_EMPLOYEE_CREATED", "EMPLOYEE", id.toString(), "{\"source\":\"HR_API\"}");
@@ -92,20 +121,22 @@ public class HrService {
     @Transactional
     public EmployeeView updateEmployee(UUID companyId, UUID employeeId, EmployeeUpdateRequest request, String actor) {
         ensureCompanyResource("employees", companyId, employeeId, "Employee");
+        ensureEmployeeOrganization(companyId, request.branchId(), request.departmentId(), request.positionId());
         jdbc.sql("""
             update employees set full_name=coalesce(:name,full_name),work_email=coalesce(:email,work_email),
-              job_title=coalesce(:title,job_title),employment_status=coalesce(:status,employment_status)
+              branch_id=coalesce(:branchId,branch_id),department_id=coalesce(:departmentId,department_id),
+              position_id=coalesce(:positionId,position_id),job_title=coalesce(:title,job_title),
+              employment_status=coalesce(:status,employment_status)
             where id=:id and company_id=:companyId
             """).param("name", blankToNull(request.fullName())).param("email", blankToNull(request.workEmail()))
-            .param("title", blankToNull(request.jobTitle())).param("status", blankToNull(request.employmentStatus()))
+            .param("branchId", uuid(request.branchId())).param("departmentId", uuid(request.departmentId()))
+            .param("positionId", uuid(request.positionId())).param("title", blankToNull(request.jobTitle()))
+            .param("status", blankToNull(request.employmentStatus()))
             .param("id", employeeId.toString()).param("companyId", companyId.toString()).update();
-        if (request.departmentId() != null) ensureCompanyResource("departments", companyId, request.departmentId(), "Department");
-        if (request.departmentId() != null) {
-            jdbc.sql("update employees set department_id=:departmentId where id=:id and company_id=:companyId")
-                .param("departmentId", request.departmentId().toString()).param("id", employeeId.toString())
-                .param("companyId", companyId.toString()).update();
-        }
         if (request.managerEmployeeId() != null) ensureCompanyResource("employees", companyId, request.managerEmployeeId(), "Manager");
+        if (employeeId.equals(request.managerEmployeeId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Employee cannot manage themselves");
+        }
         if (request.managerEmployeeId() != null) {
             jdbc.sql("update employees set manager_employee_id=:managerId where id=:id and company_id=:companyId")
                 .param("managerId", request.managerEmployeeId().toString()).param("id", employeeId.toString())
@@ -1078,21 +1109,50 @@ public class HrService {
 
     private EmployeeView employee(UUID companyId, UUID employeeId) {
         return jdbc.sql("""
-            select e.id,e.employee_code,e.full_name,e.work_email,e.department_id,d.name department_name,
+            select e.id,e.employee_code,e.full_name,e.work_email,e.branch_id,b.name branch_name,
+                   e.department_id,d.name department_name,e.position_id,p.title position_title,
                    e.job_title,e.manager_employee_id,e.join_date,e.employment_status
-            from employees e left join departments d on d.id=e.department_id
+            from employees e left join company_branches b on b.id=e.branch_id
+              left join departments d on d.id=e.department_id
+              left join job_positions p on p.id=e.position_id
             where e.company_id=:companyId and e.id=:employeeId
             """).param("companyId", companyId.toString()).param("employeeId", employeeId.toString())
             .query(this::employeeView).optional().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Employee not found"));
     }
 
     private EmployeeView employeeView(ResultSet rs, int row) throws SQLException {
+        String branch = rs.getString("branch_id");
         String department = rs.getString("department_id");
+        String position = rs.getString("position_id");
         String manager = rs.getString("manager_employee_id");
         return new EmployeeView(UUID.fromString(rs.getString("id")), rs.getString("employee_code"), rs.getString("full_name"),
-            rs.getString("work_email"), department == null ? null : UUID.fromString(department), rs.getString("department_name"),
-            rs.getString("job_title"), manager == null ? null : UUID.fromString(manager),
+            rs.getString("work_email"), branch == null ? null : UUID.fromString(branch), rs.getString("branch_name"),
+            department == null ? null : UUID.fromString(department), rs.getString("department_name"),
+            position == null ? null : UUID.fromString(position), rs.getString("position_title"), rs.getString("job_title"),
+            manager == null ? null : UUID.fromString(manager),
             rs.getObject("join_date", LocalDate.class), rs.getString("employment_status"));
+    }
+
+    private void ensureEmployeeOrganization(UUID companyId, UUID branchId, UUID departmentId, UUID positionId) {
+        if (branchId != null) ensureCompanyResource("company_branches", companyId, branchId, "Branch");
+        if (departmentId != null) ensureCompanyResource("departments", companyId, departmentId, "Department");
+        if (positionId != null) ensureCompanyResource("job_positions", companyId, positionId, "Position");
+        if (branchId != null && departmentId != null) {
+            long matches = jdbc.sql("""
+                select count(*) from departments
+                where company_id=:companyId and id=:departmentId and (branch_id is null or branch_id=:branchId)
+                """).param("companyId", companyId.toString()).param("departmentId", departmentId.toString())
+                .param("branchId", branchId.toString()).query(Long.class).single();
+            if (matches == 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Department does not belong to branch");
+        }
+        if (departmentId != null && positionId != null) {
+            long matches = jdbc.sql("""
+                select count(*) from job_positions
+                where company_id=:companyId and id=:positionId and (department_id is null or department_id=:departmentId)
+                """).param("companyId", companyId.toString()).param("positionId", positionId.toString())
+                .param("departmentId", departmentId.toString()).query(Long.class).single();
+            if (matches == 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Position does not belong to department");
+        }
     }
 
     private void savePrivate(UUID companyId, UUID employeeId, PrivateProfileRequest profile) {
@@ -1115,7 +1175,7 @@ public class HrService {
         return namedJdbc.queryForList(sql, Map.of("companyId", companyId.toString()));
     }
     private UUID ownEmployeeId(UUID companyId, String subject) {
-        return jdbc.sql("select id from employees where company_id=:companyId and keycloak_subject=:subject and employment_status='ACTIVE'")
+        return jdbc.sql("select id from employees where company_id=:companyId and keycloak_subject=:subject and employment_status in ('ACTIVE','PROBATION')")
             .param("companyId", companyId.toString()).param("subject", subject).query(String.class).optional()
             .map(UUID::fromString).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Employee identity is not linked"));
     }

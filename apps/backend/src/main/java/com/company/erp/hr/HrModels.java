@@ -18,7 +18,9 @@ public final class HrModels {
         @NotBlank @Size(max = 40) String employeeCode,
         @NotBlank @Size(max = 180) String fullName,
         @Email @Size(max = 254) String workEmail,
+        UUID branchId,
         UUID departmentId,
+        UUID positionId,
         @NotBlank @Size(max = 180) String jobTitle,
         UUID managerEmployeeId,
         @NotNull LocalDate joinDate,
@@ -36,7 +38,8 @@ public final class HrModels {
         @Size(max = 80) String emergencyPhone) {}
 
     public record EmployeeView(UUID id, String employeeCode, String fullName, String workEmail,
-        UUID departmentId, String departmentName, String jobTitle, UUID managerEmployeeId,
+        UUID branchId, String branchName, UUID departmentId, String departmentName,
+        UUID positionId, String positionTitle, String jobTitle, UUID managerEmployeeId,
         LocalDate joinDate, String employmentStatus) {}
 
     public record PrivateProfileView(LocalDate dateOfBirth, String identityType, String identityNumber,
@@ -247,10 +250,13 @@ public final class HrModels {
     public record EmployeeUpdateRequest(
         @Size(max = 180) String fullName,
         @Email @Size(max = 254) String workEmail,
+        UUID branchId,
         UUID departmentId,
+        UUID positionId,
         @Size(max = 180) String jobTitle,
         UUID managerEmployeeId,
-        @Size(max = 30) String employmentStatus) {}
+        @jakarta.validation.constraints.Pattern(regexp = "ACTIVE|PROBATION|ON_LEAVE|SUSPENDED|OFFBOARDING|TERMINATED")
+        String employmentStatus) {}
 
     public record PrivateProfileUpdateRequest(
         LocalDate dateOfBirth,

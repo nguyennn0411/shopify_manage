@@ -2,6 +2,7 @@ package com.company.erp.pm;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.oidcLogin;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -29,6 +30,7 @@ import org.springframework.test.web.servlet.MockMvc;
 class PmSecurityTest {
     private static final UUID COMPANY_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID EMPLOYEE_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+    private static final UUID PROJECT_ID = UUID.fromString("33333333-3333-3333-3333-333333333333");
     @Autowired MockMvc mvc;
     @MockitoBean PmService pmService;
     @MockitoBean(name = "pmAccess") PmAccess pmAccess;
@@ -43,10 +45,10 @@ class PmSecurityTest {
         ValueOperations<String, String> values = org.mockito.Mockito.mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
         when(values.increment(any(String.class))).thenReturn(1L);
-        when(pmService.projects(COMPANY_ID)).thenReturn(List.of());
+        when(pmService.projects(eq(COMPANY_ID), any())).thenReturn(List.of());
         when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("pm.project.read"))).thenReturn(true);
         when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("pm.project.write"))).thenReturn(false);
-        when(pmAccess.canViewTimesheets(any(), eq(COMPANY_ID), eq(EMPLOYEE_ID))).thenReturn(false);
+        when(pmAccess.canViewTimesheets(any(), eq(COMPANY_ID), eq(EMPLOYEE_ID), isNull(), isNull())).thenReturn(false);
     }
 
     @Test
@@ -63,7 +65,7 @@ class PmSecurityTest {
         mvc.perform(get("/api/v1/pm/timesheets").param("companyId", COMPANY_ID.toString())
                 .param("employeeId", EMPLOYEE_ID.toString()).with(oidcLogin()))
             .andExpect(status().isForbidden());
-        when(pmAccess.canViewTimesheets(any(), eq(COMPANY_ID), eq(EMPLOYEE_ID))).thenReturn(true);
+        when(pmAccess.canViewTimesheets(any(), eq(COMPANY_ID), eq(EMPLOYEE_ID), isNull(), isNull())).thenReturn(true);
         when(pmService.timesheets(eq(COMPANY_ID), eq(EMPLOYEE_ID), any(), any(), any(), any())).thenReturn(List.of());
         mvc.perform(get("/api/v1/pm/timesheets").param("companyId", COMPANY_ID.toString())
                 .param("employeeId", EMPLOYEE_ID.toString()).with(oidcLogin()))
@@ -79,5 +81,29 @@ class PmSecurityTest {
         when(pmService.summary(eq(COMPANY_ID), any())).thenReturn(null);
         mvc.perform(get("/api/v1/pm/summary").param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
             .andExpect(status().isOk());
+    }
+
+    @Test
+    void companyPermissionStillRequiresAssignedProjectScope() throws Exception {
+        when(pmAccess.canAccessProject(any(), eq(COMPANY_ID), eq(PROJECT_ID), eq("pm.project.read"))).thenReturn(false);
+        mvc.perform(get("/api/v1/pm/projects/{id}", PROJECT_ID).param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
+            .andExpect(status().isForbidden());
+        when(pmAccess.canAccessProject(any(), eq(COMPANY_ID), eq(PROJECT_ID), eq("pm.project.read"))).thenReturn(true);
+        mvc.perform(get("/api/v1/pm/projects/{id}", PROJECT_ID).param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void workloadReadDoesNotGrantCapacityWrite() throws Exception {
+        when(companyAccess.canAccess(any(), eq(COMPANY_ID), eq("pm.workload.read"))).thenReturn(true);
+        when(pmService.workload(eq(COMPANY_ID), isNull(), isNull(), isNull())).thenReturn(List.of());
+        mvc.perform(get("/api/v1/pm/workload").param("companyId", COMPANY_ID.toString()).with(oidcLogin()))
+            .andExpect(status().isOk());
+        when(pmAccess.canManageCapacity(any(), eq(COMPANY_ID), eq(EMPLOYEE_ID))).thenReturn(false);
+        mvc.perform(post("/api/v1/pm/workload/capacity").param("companyId", COMPANY_ID.toString())
+                .contentType("application/json")
+                .content("{\"employeeId\":\"" + EMPLOYEE_ID + "\",\"weeklyCapacityHours\":40}")
+                .with(oidcLogin()))
+            .andExpect(status().isForbidden());
     }
 }

@@ -35,7 +35,24 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:8088/login##${APP_ORIGIN}/login"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "ERP realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "roles": {
@@ -49,6 +66,18 @@
       },
       {
         "name": "company.write"
+      },
+      {
+        "name": "identity.account.read"
+      },
+      {
+        "name": "identity.account.write"
+      },
+      {
+        "name": "identity.role.read"
+      },
+      {
+        "name": "identity.role.write"
       },
       {
         "name": "stores.read"
@@ -115,6 +144,9 @@
       },
       {
         "name": "hr.employee.write"
+      },
+      {
+        "name": "hr.employee.write.sensitive"
       },
       {
         "name": "hr.recruitment.read"
@@ -216,6 +248,9 @@
         "name": "pm.workload.read"
       },
       {
+        "name": "pm.workload.write"
+      },
+      {
         "name": "pm.report.read"
       },
       {
@@ -223,6 +258,270 @@
       },
       {
         "name": "pm.issue.write"
+      },
+      {
+        "name": "crm.access"
+      },
+      {
+        "name": "crm.customer.read"
+      },
+      {
+        "name": "crm.customer.write"
+      },
+      {
+        "name": "crm.pipeline.read"
+      },
+      {
+        "name": "crm.pipeline.write"
+      },
+      {
+        "name": "crm.quote.read"
+      },
+      {
+        "name": "crm.quote.write"
+      },
+      {
+        "name": "crm.quote.approve"
+      },
+      {
+        "name": "crm.contract.read"
+      },
+      {
+        "name": "crm.contract.write"
+      },
+      {
+        "name": "crm.order.read"
+      },
+      {
+        "name": "crm.order.write"
+      },
+      {
+        "name": "crm.support.read"
+      },
+      {
+        "name": "crm.support.write"
+      },
+      {
+        "name": "crm.marketing.read"
+      },
+      {
+        "name": "crm.marketing.write"
+      },
+      {
+        "name": "finance.access"
+      },
+      {
+        "name": "finance.transaction.read"
+      },
+      {
+        "name": "finance.transaction.write"
+      },
+      {
+        "name": "finance.transaction.approve"
+      },
+      {
+        "name": "finance.budget.read"
+      },
+      {
+        "name": "finance.budget.write"
+      },
+      {
+        "name": "finance.invoice.read"
+      },
+      {
+        "name": "finance.invoice.write"
+      },
+      {
+        "name": "finance.advance.read"
+      },
+      {
+        "name": "finance.advance.write"
+      },
+      {
+        "name": "finance.advance.approve"
+      },
+      {
+        "name": "finance.project-cost.read"
+      },
+      {
+        "name": "finance.project-cost.write"
+      },
+      {
+        "name": "finance.accounting.read"
+      },
+      {
+        "name": "finance.accounting.write"
+      },
+      {
+        "name": "finance.period.close"
+      },
+      {
+        "name": "finance.report.read"
+      },
+      {
+        "name": "operations.access"
+      },
+      {
+        "name": "procurement.approve"
+      },
+      {
+        "name": "inventory.count.approve"
+      },
+      {
+        "name": "asset.read"
+      },
+      {
+        "name": "asset.write"
+      },
+      {
+        "name": "maintenance.read"
+      },
+      {
+        "name": "maintenance.write"
+      },
+      {
+        "name": "license.read"
+      },
+      {
+        "name": "license.write"
+      },
+      {
+        "name": "manufacturing.read"
+      },
+      {
+        "name": "manufacturing.write"
+      },
+      {
+        "name": "workplace.access"
+      },
+      {
+        "name": "document.read"
+      },
+      {
+        "name": "document.write"
+      },
+      {
+        "name": "document.share"
+      },
+      {
+        "name": "knowledge.read"
+      },
+      {
+        "name": "knowledge.write"
+      },
+      {
+        "name": "approval.read"
+      },
+      {
+        "name": "approval.write"
+      },
+      {
+        "name": "approval.decide"
+      },
+      {
+        "name": "form.read"
+      },
+      {
+        "name": "form.write"
+      },
+      {
+        "name": "form.submit"
+      },
+      {
+        "name": "signature.read"
+      },
+      {
+        "name": "signature.write"
+      },
+      {
+        "name": "signature.sign"
+      },
+      {
+        "name": "helpdesk.read"
+      },
+      {
+        "name": "helpdesk.write"
+      },
+      {
+        "name": "helpdesk.manage"
+      },
+      {
+        "name": "communication.read"
+      },
+      {
+        "name": "communication.write"
+      },
+      {
+        "name": "communication.moderate"
+      },
+      {
+        "name": "legal.read"
+      },
+      {
+        "name": "legal.write"
+      },
+      {
+        "name": "platform.search"
+      },
+      {
+        "name": "notification.read"
+      },
+      {
+        "name": "notification.write"
+      },
+      {
+        "name": "notification.manage"
+      },
+      {
+        "name": "saved-view.read"
+      },
+      {
+        "name": "saved-view.write"
+      },
+      {
+        "name": "saved-view.share"
+      },
+      {
+        "name": "automation.access"
+      },
+      {
+        "name": "automation.read"
+      },
+      {
+        "name": "automation.write"
+      },
+      {
+        "name": "automation.run"
+      },
+      {
+        "name": "integration.read"
+      },
+      {
+        "name": "integration.write"
+      },
+      {
+        "name": "webhook.read"
+      },
+      {
+        "name": "webhook.write"
+      },
+      {
+        "name": "reporting.access"
+      },
+      {
+        "name": "reporting.read"
+      },
+      {
+        "name": "reporting.manage"
+      },
+      {
+        "name": "reporting.export"
+      },
+      {
+        "name": "strategy.read"
+      },
+      {
+        "name": "strategy.write"
       }
     ]
   },

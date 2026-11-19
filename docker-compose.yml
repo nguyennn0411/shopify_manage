@@ -74,6 +74,7 @@ services:
     build: { context: ./apps/backend }
     restart: unless-stopped
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
       DATABASE_JDBC_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DATABASE:-erp}?currentSchema=erp_v2&sslmode=disable
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -88,6 +89,12 @@ services:
       OIDC_PUBLIC_URL: ${APP_ORIGIN}/auth
       OIDC_INTERNAL_URL: http://keycloak:8080/auth
       OIDC_REALM: company-erp
+      DEV_SEED_ENABLED: ${DEV_SEED_ENABLED:-false}
+      DEV_SEED_COMPANY_CODE: ${DEV_SEED_COMPANY_CODE:-DEMO}
+      DEV_SEED_COMPANY_NAME: ${DEV_SEED_COMPANY_NAME:-Demo Company}
+      DEV_SEED_KEYCLOAK_SUBJECT: ${DEV_SEED_KEYCLOAK_SUBJECT:-dev-user-subject}
+      DEV_SEED_EMAIL: ${DEV_SEED_EMAIL:-developer@example.test}
+      DEV_SEED_DISPLAY_NAME: ${DEV_SEED_DISPLAY_NAME:-Development User}
     networks: [edge, data]
     depends_on:
       postgres: { condition: service_healthy }

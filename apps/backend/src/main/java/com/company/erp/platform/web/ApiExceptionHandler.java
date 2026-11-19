@@ -1,6 +1,7 @@
 package com.company.erp.platform.web;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -24,6 +25,15 @@ public class ApiExceptionHandler {
         var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
         problem.setTitle("Invalid request");
         problem.setProperty("fields", exception.getBindingResult().getFieldErrors().stream().map(error -> error.getField()).distinct().toList());
+        return problem;
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    ProblemDetail constraintValidation(ConstraintViolationException exception) {
+        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request validation failed");
+        problem.setTitle("Invalid request");
+        problem.setProperty("fields", exception.getConstraintViolations().stream()
+            .map(violation -> violation.getPropertyPath().toString()).distinct().toList());
         return problem;
     }
 

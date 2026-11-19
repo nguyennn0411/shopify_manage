@@ -1,0 +1,21 @@
+spring:
+  config:
+    activate:
+      on-profile: production
+  flyway:
+    clean-disabled: true
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+management:
+  endpoint:
+    health:
+      show-details: never
+app:
+  dev-seed:
+    enabled: false
+logging:
+  level:
+    root: INFO

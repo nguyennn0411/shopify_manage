@@ -75,7 +75,7 @@ export function WorkloadPage() {
       </tbody></table></div> : <div className="empty-table"><p>Chưa có dữ liệu tải lượng.</p></div>}
     </section>
 
-    {can('pm.workload.read') && <section className="panel"><div className="quick-action-title"><Plus />
+    {can('pm.workload.write') && <section className="panel"><div className="quick-action-title"><Plus />
       <div><strong>Chỉnh năng lực</strong><p>Giờ làm việc tối đa mỗi tuần của một người.</p></div></div>
       <form className="form-grid compact-form" onSubmit={form.handleSubmit(values => setCapacity.mutate(values))}>
         <label>Nhân viên<select {...form.register('employeeId')}><option value="">Chọn nhân viên</option>{employees.data?.map(row => <option key={text(row, 'id')} value={text(row, 'id')}>{text(row, 'fullName')}</option>)}</select></label>

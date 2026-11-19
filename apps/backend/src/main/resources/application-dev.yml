@@ -1,0 +1,23 @@
+spring:
+  config:
+    activate:
+      on-profile: dev
+  flyway:
+    clean-disabled: true
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+management:
+  endpoint:
+    health:
+      show-details: always
+app:
+  dev-seed:
+    enabled: ${DEV_SEED_ENABLED:false}
+    company-code: ${DEV_SEED_COMPANY_CODE:DEMO}
+    company-name: ${DEV_SEED_COMPANY_NAME:Demo Company}
+    keycloak-subject: ${DEV_SEED_KEYCLOAK_SUBJECT:dev-user-subject}
+    email: ${DEV_SEED_EMAIL:developer@example.test}
+    display-name: ${DEV_SEED_DISPLAY_NAME:Development User}
